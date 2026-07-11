@@ -93,7 +93,7 @@ dyaf/
 ├── rules/                 # محرك القواعد
 │   ├── conditions.py      #   شجرة شروط متداخلة AND/OR/NOT + مشغّلات قابلة للتوسعة
 │   ├── aggregations.py    #   count, sum, avg, min, max, distinct_count,
-│   │                      #   percentage, ratio, stddev*, moving_average*
+│   │                      #   percentage, ratio, difference, stddev*, moving_average*
 │   ├── models.py          #   تعريف القاعدة (§6) + التحقق
 │   ├── query_builder.py   #   توليد Elasticsearch DSL (Query Preview + pushdown)
 │   ├── engine.py          #   fetch من ES → group by → aggregate → threshold → alerts
@@ -116,6 +116,19 @@ dyaf/
 ### §6 Rule Execution — كل قاعدة تعرّف:
 Data Source · Target Entity · Execution Frequency · Time Window · Aggregation Type ·
 Output Threshold · Risk Score · Alert Severity
+
+**الفهارس الثلاثة:**
+- `transactions` — الحركات المُثراة (سمات محفظتي المرسل/المستقبل بـ `sender_*`/`receiver_*`).
+- `wallets` — المحافظ (تشمل `created_at` تاريخ إنشاء المحفظة).
+- `wallet_transactions` — **عرض ثنائي الاتجاه**: كل حركة تُفهرس مرتين، مرة `debit` لمحفظة
+  المرسل ومرة `credit` لمحفظة المستقبل (حقول `wallet_id`, `direction`,
+  `counterparty_wallet_id`) — يتيح قواعد على مستوى العميل تقارن الصادر بالوارد،
+  مثل «العميل الذي مجموع حركاته المدينة أكبر من الدائنة»:
+  `difference(amount, numerator: direction=debit, denominator: direction=credit) > 0`.
+
+**فلاتر التاريخ:** حقول النوع `date` تُقارن كتواريخ فعلية (وليس نصاً) في كل المشغّلات
+(gt/gte/lt/lte/eq/between)، والواجهة تعرض منتقي تاريخ ووقت (datetime picker) تلقائياً
+لهذه الحقول — يمكن مثلاً فلترة `executed_at >= 2026-07-01T00:00`.
 
 **نمطا القواعد:**
 - **Aggregation Rule**: تجميع (count/sum/avg/percentage/...) حسب Group By ومقارنة الناتج بالـ Threshold — مثل «5 سحوبات قرب الحد خلال 24 ساعة».

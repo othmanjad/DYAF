@@ -120,12 +120,28 @@ def _agg_percentage(rows, field, config):
 
 
 def _agg_ratio(rows, field, config):
-    """Ratio between two condition subsets (numerator / denominator)."""
+    """Ratio between two condition subsets (numerator / denominator).
+
+    Returns 0 when the denominator is empty — for "A exceeds B even when
+    B is zero" semantics use the `difference` aggregation instead.
+    """
     num = _measure(_subset(rows, config.get("numerator_condition")), field)
     den = _measure(_subset(rows, config.get("denominator_condition")), field)
     if den == 0:
         return 0.0
     return num / den
+
+
+def _agg_difference(rows, field, config):
+    """Difference between two condition subsets (numerator - denominator).
+
+    Example: total debit amount minus total credit amount > 0 catches
+    wallets that send more than they receive, including wallets with no
+    incoming transactions at all.
+    """
+    num = _measure(_subset(rows, config.get("numerator_condition")), field)
+    den = _measure(_subset(rows, config.get("denominator_condition")), field)
+    return num - den
 
 
 def _agg_stddev(rows, field, config):
@@ -152,6 +168,8 @@ register("percentage", _agg_percentage, needs_field=False,
          description="Percentage of the group matching a numerator condition (by count, or by sum of field)")
 register("ratio", _agg_ratio, needs_field=False,
          description="Ratio between numerator and denominator condition subsets")
+register("difference", _agg_difference, needs_field=False,
+         description="Difference (numerator - denominator) between two condition subsets")
 register("stddev", _agg_stddev, needs_field=True, experimental=True,
          description="Standard deviation of a numeric field (future support)")
 register("moving_average", _agg_moving_average, needs_field=True, experimental=True,

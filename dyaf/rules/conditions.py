@@ -12,7 +12,8 @@ Shape:
 """
 from __future__ import annotations
 
-from typing import Any, Callable
+from datetime import datetime, timezone
+from typing import Any, Callable, Optional
 
 LOGIC_OPERATORS = ("AND", "OR", "NOT")
 
@@ -32,27 +33,59 @@ def _to_num(v):
         return None
 
 
-def _cmp(a, b, op) -> bool:
+def _to_dt(v) -> Optional[datetime]:
+    """Parse ISO 8601 datetimes (naive values are assumed UTC)."""
+    if isinstance(v, datetime):
+        return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+    if isinstance(v, str):
+        try:
+            dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def _compare(a, b) -> Optional[int]:
+    """Ordering with datetime > numeric > string precedence.
+
+    Returns -1/0/1, or None when either side is missing.
+    """
+    da, db = _to_dt(a), _to_dt(b)
+    if da is not None and db is not None:
+        return (da > db) - (da < db)
     na, nb = _to_num(a), _to_num(b)
     if na is not None and nb is not None:
-        return op(na, nb)
+        return (na > nb) - (na < nb)
     if a is None or b is None:
+        return None
+    sa, sb = str(a), str(b)
+    return (sa > sb) - (sa < sb)
+
+
+def _cmp(a, b, op) -> bool:
+    c = _compare(a, b)
+    return False if c is None else op(c, 0)
+
+
+def _between(a, b) -> bool:
+    if not (isinstance(b, (list, tuple)) and len(b) == 2):
         return False
-    return op(str(a), str(b))
+    lo, hi = _compare(a, b[0]), _compare(a, b[1])
+    return lo is not None and hi is not None and lo >= 0 and hi <= 0
 
 
-register_operator("eq", lambda a, b: (str(a) == str(b)) if not (_to_num(a) is not None and _to_num(b) is not None) else _to_num(a) == _to_num(b))
+register_operator("eq", lambda a, b: _compare(a, b) == 0 if a is not None else False)
 register_operator("neq", lambda a, b: not _OPERATORS["eq"][0](a, b))
-register_operator("gt", lambda a, b: _cmp(a, b, lambda x, y: x > y))
-register_operator("gte", lambda a, b: _cmp(a, b, lambda x, y: x >= y))
-register_operator("lt", lambda a, b: _cmp(a, b, lambda x, y: x < y))
-register_operator("lte", lambda a, b: _cmp(a, b, lambda x, y: x <= y))
+register_operator("gt", lambda a, b: _cmp(a, b, lambda c, z: c > z))
+register_operator("gte", lambda a, b: _cmp(a, b, lambda c, z: c >= z))
+register_operator("lt", lambda a, b: _cmp(a, b, lambda c, z: c < z))
+register_operator("lte", lambda a, b: _cmp(a, b, lambda c, z: c <= z))
 register_operator("in", lambda a, b: str(a) in [str(x) for x in (b if isinstance(b, list) else [b])])
 register_operator("not_in", lambda a, b: not _OPERATORS["in"][0](a, b))
 register_operator("contains", lambda a, b: a is not None and str(b).lower() in str(a).lower())
 register_operator("starts_with", lambda a, b: a is not None and str(a).lower().startswith(str(b).lower()))
-register_operator("between", lambda a, b: isinstance(b, (list, tuple)) and len(b) == 2
-                  and _to_num(a) is not None and _to_num(b[0]) <= _to_num(a) <= _to_num(b[1]))
+register_operator("between", _between)
 register_operator("exists", lambda a, b: a is not None and a != "", requires_value=False)
 register_operator("missing", lambda a, b: a is None or a == "", requires_value=False)
 

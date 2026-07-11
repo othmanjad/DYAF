@@ -252,18 +252,25 @@ function renderCondition(c,parent,idx,onChange){
   const drag=document.createElement("span");drag.className="drag";drag.textContent="⋮⋮";row.appendChild(drag);
   const f=document.createElement("select");
   FIELDS.forEach(fl=>{const o=document.createElement("option");o.value=fl.name;o.textContent=`${fl.name} (${fl.type})`;f.appendChild(o)});
-  f.value=c.field;f.onchange=()=>{c.field=f.value};row.appendChild(f);
+  f.value=c.field;row.appendChild(f);
   const op=document.createElement("select");
   (META.operators||[]).forEach(o2=>{const o=document.createElement("option");o.value=o2.name;o.textContent=o2.name;op.appendChild(o)});
   op.value=c.operator;row.appendChild(op);
   const v=document.createElement("input");v.placeholder="value (comma list for in/between)";
   v.value=Array.isArray(c.value)?c.value.join(","):(c.value??"");
+  const isDateField=()=>((FIELDS.find(x=>x.name===f.value)||{}).type==="date");
   const syncV=()=>{const needs=(META.operators.find(x=>x.name===op.value)||{}).requires_value!==false;
     v.style.display=needs?"":"none";
+    // date fields get a native datetime picker for comparison operators
+    const wantsDt=isDateField()&&["gt","gte","lt","lte","eq","neq"].includes(op.value);
+    const newType=wantsDt?"datetime-local":"text";
+    if(v.type!==newType){v.type=newType}
     let raw=v.value;
     if(["in","not_in","between"].includes(op.value)){c.value=raw.split(",").map(s=>s.trim()).filter(s=>s!=="").map(s=>isNaN(+s)?s:+s)}
+    else if(wantsDt||isDateField()){c.value=raw}   // keep ISO datetime strings as-is
     else c.value=raw!==""&&!isNaN(+raw)?+raw:raw};
-  op.onchange=()=>{c.operator=op.value;syncV()};v.oninput=syncV;syncV();
+  f.onchange=()=>{c.field=f.value;syncV()};
+  op.onchange=()=>{c.operator=op.value;syncV()};v.oninput=syncV;v.onchange=syncV;syncV();
   row.appendChild(v);
   const del=document.createElement("button");del.className="btn subtle danger";del.textContent="✕";
   del.onclick=()=>{parent.conditions.splice(idx,1);onChange()};row.appendChild(del);
@@ -272,9 +279,9 @@ function renderCondition(c,parent,idx,onChange){
 
 function renderAll(){
   renderGroup(condTree,$("cond-root"),renderAll,0);
-  const agg=$("r-agg").value, matchMode=(agg===""), needsSub=(agg==="percentage"||agg==="ratio");
+  const agg=$("r-agg").value, matchMode=(agg===""), needsSub=(agg==="percentage"||agg==="ratio"||agg==="difference");
   $("agg-sub").classList.toggle("hidden",!needsSub);
-  $("agg-den-wrap").classList.toggle("hidden",agg!=="ratio");
+  $("agg-den-wrap").classList.toggle("hidden",agg!=="ratio"&&agg!=="difference");
   const needsField=(META.aggregations.find(a=>a.name===agg)||{}).needs_field;
   $("agg-field-wrap").style.visibility=(needsField&&!matchMode)?"visible":"hidden";
   // match mode: no threshold needed — one alert per matching record
@@ -283,7 +290,7 @@ function renderAll(){
   if(needsSub){
     if(!numTree)numTree=newGroup("AND");
     renderGroup(numTree,$("agg-num"),renderAll,1);
-    if(agg==="ratio"){if(!denTree)denTree=newGroup("AND");renderGroup(denTree,$("agg-den"),renderAll,1)}
+    if(agg==="ratio"||agg==="difference"){if(!denTree)denTree=newGroup("AND");renderGroup(denTree,$("agg-den"),renderAll,1)}
   }
 }
 
@@ -299,9 +306,9 @@ function buildDefinition(){
     a={type:agg};
     const needsField=(META.aggregations.find(x=>x.name===agg)||{}).needs_field;
     if(needsField)a.field=$("r-agg-field").value;
-    if(agg==="percentage"||agg==="ratio"){
+    if(agg==="percentage"||agg==="ratio"||agg==="difference"){
       a.config={};const nt=cleanTree(numTree);if(nt)a.config.numerator_condition=nt;
-      if(agg==="ratio"){const dt=cleanTree(denTree);if(dt)a.config.denominator_condition=dt}
+      if(agg==="ratio"||agg==="difference"){const dt=cleanTree(denTree);if(dt)a.config.denominator_condition=dt}
       const m=$("r-agg-measure").value;if(m)a.field=m;
     }
   }

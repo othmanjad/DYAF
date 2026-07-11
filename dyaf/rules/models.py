@@ -154,10 +154,9 @@ def validate_rule(defn: dict, known_fields: Optional[set[str]] = None,
                 elif known_fields is not None and agg_field not in known_fields:
                     errors.append(f"Unknown aggregation field '{agg_field}'")
             cfg = agg.get("config") or {}
-            if agg_type == "ratio" and not cfg.get("numerator_condition"):
-                errors.append("Aggregation 'ratio' requires config.numerator_condition")
-            if agg_type == "percentage" and not cfg.get("numerator_condition"):
-                errors.append("Aggregation 'percentage' requires config.numerator_condition")
+            for needs_numerator in ("ratio", "difference", "percentage"):
+                if agg_type == needs_numerator and not cfg.get("numerator_condition"):
+                    errors.append(f"Aggregation '{needs_numerator}' requires config.numerator_condition")
             for sub in ("numerator_condition", "denominator_condition"):
                 if cfg.get(sub):
                     errors.extend(conditions.validate(cfg[sub], known_fields, path=f"aggregation.{sub}"))

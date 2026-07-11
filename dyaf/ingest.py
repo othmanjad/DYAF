@@ -40,7 +40,7 @@ _SAMPLE_ROWS = {
         "wallet_id": "W-1001", "owner_name": "Ahmad Khalil", "nationality": "JO",
         "residence_country": "JO", "date_of_birth": "1988-04-12",
         "risk_rating": "Medium", "kyc_status": "Verified", "pep_status": "false",
-        "wallet_type": "Customer Wallet",
+        "wallet_type": "Customer Wallet", "created_at": "2024-03-15T09:30:00",
     },
 }
 
@@ -84,6 +84,7 @@ def _wallet_properties() -> dict:
         "kyc_status": {"type": "keyword"},
         "pep_status": {"type": "boolean"},
         "wallet_type": {"type": "keyword"},
+        "created_at": {"type": "date", "ignore_malformed": True},
     }
 
 
@@ -133,6 +134,40 @@ def wallets_mappings() -> dict:
         ],
         "properties": _wallet_properties(),
     }
+
+
+def wallet_transactions_mappings() -> dict:
+    """Per-direction view of transactions: each transaction is indexed
+    twice — once as a *debit* for the sending wallet and once as a
+    *credit* for the receiving wallet — so entity-centric rules can
+    compare money-out vs money-in for the same wallet (e.g. total debit
+    amount > total credit amount)."""
+    mappings = transactions_mappings()
+    mappings["properties"].update({
+        "wallet_id": {"type": "keyword"},
+        "direction": {"type": "keyword"},          # debit | credit
+        "counterparty_wallet_id": {"type": "keyword"},
+        "doc_id": {"type": "keyword"},
+    })
+    return mappings
+
+
+def explode_wallet_transactions(rows: list[dict]) -> list[dict]:
+    """Expand enriched transaction docs into per-wallet direction docs."""
+    docs: list[dict] = []
+    for r in rows:
+        for direction, wallet_key, cp_key, suffix in (
+                ("debit", "sender_wallet_id", "receiver_wallet_id", "D"),
+                ("credit", "receiver_wallet_id", "sender_wallet_id", "C")):
+            if not r.get(wallet_key):
+                continue
+            d = dict(r)
+            d["wallet_id"] = r[wallet_key]
+            d["direction"] = direction
+            d["counterparty_wallet_id"] = r.get(cp_key)
+            d["doc_id"] = f"{r.get('transaction_id')}-{suffix}"
+            docs.append(d)
+    return docs
 
 
 # ----------------------------------------------------------------------

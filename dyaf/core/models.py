@@ -41,6 +41,7 @@ class Wallet:
     kyc_status: str = KycStatus.NOT_STARTED.value
     pep_status: bool = False
     wallet_type: str = WalletType.CUSTOMER.value
+    created_at: Optional[str] = None  # wallet creation datetime (ISO 8601)
 
     def to_dict(self) -> dict:
         d = asdict(self)

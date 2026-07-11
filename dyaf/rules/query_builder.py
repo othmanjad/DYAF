@@ -79,7 +79,7 @@ def _metric_agg(agg: dict) -> Optional[dict]:
             buckets = {"num": "numerator>_count", "total": "_count"}
         aggs["metric"] = {"bucket_script": {"buckets_path": buckets, "script": script}}
         return aggs
-    if agg_type == "ratio":
+    if agg_type in ("ratio", "difference"):
         measure_of = ({"sum": {"field": field}} if field else None)
         num: dict = {"filter": build_bool_query(cfg.get("numerator_condition"))}
         den: dict = {"filter": build_bool_query(cfg.get("denominator_condition"))}
@@ -89,10 +89,11 @@ def _metric_agg(agg: dict) -> Optional[dict]:
             paths = {"num": "numerator>measure", "den": "denominator>measure"}
         else:
             paths = {"num": "numerator>_count", "den": "denominator>_count"}
+        script = "params.num / params.den" if agg_type == "ratio" else "params.num - params.den"
         return {
             "numerator": num,
             "denominator": den,
-            "metric": {"bucket_script": {"buckets_path": paths, "script": "params.num / params.den"}},
+            "metric": {"bucket_script": {"buckets_path": paths, "script": script}},
         }
     if agg_type == "moving_average":
         return {"metric": {"avg": {"field": field}},

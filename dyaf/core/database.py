@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS wallets (
     risk_rating         TEXT,
     kyc_status          TEXT,
     pep_status          INTEGER DEFAULT 0,
-    wallet_type         TEXT
+    wallet_type         TEXT,
+    created_at          TEXT
 );
 
 CREATE TABLE IF NOT EXISTS transaction_types (
@@ -108,6 +109,14 @@ class Database:
         with self._lock:
             self._conn.executescript(SCHEMA)
             self._conn.commit()
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Lightweight in-place migrations for databases created by
+        earlier versions (CREATE TABLE IF NOT EXISTS skips new columns)."""
+        wallet_cols = {c["name"] for c in self.query("PRAGMA table_info(wallets)")}
+        if "created_at" not in wallet_cols:
+            self.execute("ALTER TABLE wallets ADD COLUMN created_at TEXT")
 
     def execute(self, sql: str, params: Iterable = ()) -> sqlite3.Cursor:
         with self._lock:
@@ -128,10 +137,11 @@ class Database:
         self.execute(
             """INSERT OR REPLACE INTO wallets
                (wallet_id, owner_name, nationality, residence_country, date_of_birth,
-                risk_rating, kyc_status, pep_status, wallet_type)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+                risk_rating, kyc_status, pep_status, wallet_type, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (w.wallet_id, w.owner_name, w.nationality, w.residence_country, dob,
-             w.risk_rating, w.kyc_status, int(bool(w.pep_status)), w.wallet_type),
+             w.risk_rating, w.kyc_status, int(bool(w.pep_status)), w.wallet_type,
+             w.created_at),
         )
 
     def get_wallet(self, wallet_id: str) -> Optional[dict]:

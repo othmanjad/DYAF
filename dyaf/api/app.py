@@ -87,17 +87,22 @@ def build_registry(es_url: str, **auth) -> DataSourceRegistry:
     registry.register(ElasticsearchDataSource(
         es_url, index="wallets", timestamp_field=None,
         mappings=ingest.wallets_mappings(), **auth))
+    # per-direction (debit/credit) view for entity-centric rules
+    registry.register(ElasticsearchDataSource(
+        es_url, index="wallet_transactions", timestamp_field="executed_at",
+        mappings=ingest.wallet_transactions_mappings(), **auth))
     return registry
 
 
 def index_platform_data(db: Database, registry: DataSourceRegistry) -> dict:
     """Push the operational store's wallets + enriched transactions to ES."""
-    tx_source = registry.get("transactions")
-    wallet_source = registry.get("wallets")
     tx_rows = ingest.enrich_transactions(db, db.list_transactions())
-    tx_result = tx_source.bulk_index(tx_rows, id_field="transaction_id")
-    w_result = wallet_source.bulk_index(db.list_wallets(), id_field="wallet_id")
-    return {"transactions": tx_result, "wallets": w_result}
+    tx_result = registry.get("transactions").bulk_index(tx_rows, id_field="transaction_id")
+    wt_result = registry.get("wallet_transactions").bulk_index(
+        ingest.explode_wallet_transactions(tx_rows), id_field="doc_id")
+    w_result = registry.get("wallets").bulk_index(db.list_wallets(), id_field="wallet_id")
+    return {"transactions": tx_result, "wallet_transactions": wt_result,
+            "wallets": w_result}
 
 
 def create_app(db_path: str = ":memory:", es_url: Optional[str] = None,
@@ -216,6 +221,10 @@ def create_app(db_path: str = ":memory:", es_url: Optional[str] = None,
             for row in rows:
                 db.insert_transaction(ingest.transaction_model_from_row(dict(row)))
             docs = ingest.enrich_transactions(db, rows)
+            # keep the per-direction view in sync
+            wt = registry.get("wallet_transactions")
+            wt.ensure_index()
+            wt.bulk_index(ingest.explode_wallet_transactions(docs), id_field="doc_id")
             id_field = "transaction_id"
         elif name == "wallets":
             rows, errors = ingest.parse_wallets_csv(content)

@@ -30,15 +30,15 @@ TRANSACTION_TYPES = [
 ]
 
 WALLETS = [
-    Wallet("W-1001", "Ahmad Khalil", "JO", "JO", date(1988, 4, 12), RiskRating.MEDIUM.value, KycStatus.VERIFIED.value, False, WalletType.CUSTOMER.value),
-    Wallet("W-1002", "Layla Hassan", "JO", "JO", date(1992, 9, 3), RiskRating.LOW.value, KycStatus.VERIFIED.value, False, WalletType.CUSTOMER.value),
-    Wallet("W-1003", "Omar Nasser", "SY", "SY", date(1979, 1, 25), RiskRating.HIGH.value, KycStatus.PENDING.value, True, WalletType.CUSTOMER.value),
-    Wallet("W-1004", "Sara Aziz", "JO", "AE", date(1995, 6, 30), RiskRating.LOW.value, KycStatus.VERIFIED.value, False, WalletType.CUSTOMER.value),
-    Wallet("W-1005", "Khaled Odeh", "JO", "JO", date(1985, 11, 8), RiskRating.LOW.value, KycStatus.VERIFIED.value, False, WalletType.CUSTOMER.value),
-    Wallet("W-2001", "Agent - Downtown Branch", "JO", "JO", None, RiskRating.LOW.value, KycStatus.VERIFIED.value, False, WalletType.AGENT.value),
-    Wallet("W-2002", "Agent - Airport Kiosk", "JO", "JO", None, RiskRating.LOW.value, KycStatus.VERIFIED.value, False, WalletType.AGENT.value),
-    Wallet("W-9001", "Card Settlement Wallet", None, None, None, RiskRating.LOW.value, KycStatus.VERIFIED.value, False, WalletType.INTERNAL.value),
-    Wallet("W-9002", "Remittance Settlement Wallet", None, None, None, RiskRating.LOW.value, KycStatus.VERIFIED.value, False, WalletType.INTERNAL.value),
+    Wallet("W-1001", "Ahmad Khalil", "JO", "JO", date(1988, 4, 12), RiskRating.MEDIUM.value, KycStatus.VERIFIED.value, False, WalletType.CUSTOMER.value, created_at="2024-03-15T09:30:00"),
+    Wallet("W-1002", "Layla Hassan", "JO", "JO", date(1992, 9, 3), RiskRating.LOW.value, KycStatus.VERIFIED.value, False, WalletType.CUSTOMER.value, created_at="2023-11-02T14:10:00"),
+    Wallet("W-1003", "Omar Nasser", "SY", "SY", date(1979, 1, 25), RiskRating.HIGH.value, KycStatus.PENDING.value, True, WalletType.CUSTOMER.value, created_at="2026-06-20T11:45:00"),
+    Wallet("W-1004", "Sara Aziz", "JO", "AE", date(1995, 6, 30), RiskRating.LOW.value, KycStatus.VERIFIED.value, False, WalletType.CUSTOMER.value, created_at="2026-07-01T08:00:00"),
+    Wallet("W-1005", "Khaled Odeh", "JO", "JO", date(1985, 11, 8), RiskRating.LOW.value, KycStatus.VERIFIED.value, False, WalletType.CUSTOMER.value, created_at="2022-05-19T16:20:00"),
+    Wallet("W-2001", "Agent - Downtown Branch", "JO", "JO", None, RiskRating.LOW.value, KycStatus.VERIFIED.value, False, WalletType.AGENT.value, created_at="2021-01-10T09:00:00"),
+    Wallet("W-2002", "Agent - Airport Kiosk", "JO", "JO", None, RiskRating.LOW.value, KycStatus.VERIFIED.value, False, WalletType.AGENT.value, created_at="2021-01-10T09:00:00"),
+    Wallet("W-9001", "Card Settlement Wallet", None, None, None, RiskRating.LOW.value, KycStatus.VERIFIED.value, False, WalletType.INTERNAL.value, created_at="2020-06-01T00:00:00"),
+    Wallet("W-9002", "Remittance Settlement Wallet", None, None, None, RiskRating.LOW.value, KycStatus.VERIFIED.value, False, WalletType.INTERNAL.value, created_at="2020-06-01T00:00:00"),
 ]
 
 INTERNAL_WALLETS = [
