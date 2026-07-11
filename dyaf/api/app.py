@@ -1,6 +1,13 @@
 """REST API + Rule Builder UI host.
 
+The detection layer always reads from Elasticsearch (ELASTICSEARCH_URL,
+default http://localhost:9200). On startup the platform bootstraps the
+indices (creates them with the platform mapping on first run) and seeds
+demo data when the transactions index is empty.
+
 Endpoints cover the full requirement set:
+* Elasticsearch health / first-run index setup
+* CSV template download + CSV upload into the indices
 * dynamic field discovery per datasource (§9)
 * rule CRUD with versioning, validation, query preview, test-before-save (§6, §8)
 * rule execution + scheduler trigger (§6)
@@ -10,18 +17,19 @@ Endpoints cover the full requirement set:
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+import requests
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from ..alerts.repository import AlertRepository
 from ..core.database import Database
 from ..core.models import InternalWalletConfig
 from ..datasources.base import DataSourceRegistry
-from ..datasources.sqlite_source import TransactionsDataSource, WalletsDataSource
+from ..datasources.elasticsearch_source import ElasticsearchDataSource, ElasticsearchError
+from .. import ingest
 from ..rules import aggregations, conditions
 from ..rules.engine import RuleEngine
 from ..rules.models import AlertSeverity, Rule, TargetEntity, validate_rule
@@ -31,6 +39,7 @@ from ..scheduler import RuleScheduler
 from ..seed import seed
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+DEFAULT_ES_URL = os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200")
 
 
 class InternalWalletBody(BaseModel):
@@ -43,26 +52,66 @@ class StatusBody(BaseModel):
     investigation_status: str
 
 
-def create_app(db_path: str = ":memory:", seed_data: bool = True) -> FastAPI:
-    db = Database(db_path)
-    if seed_data and not db.query("SELECT 1 FROM wallets LIMIT 1"):
-        seed(db)
-
+def build_registry(es_url: str) -> DataSourceRegistry:
     registry = DataSourceRegistry()
-    registry.register(TransactionsDataSource(db))
-    registry.register(WalletsDataSource(db))
+    registry.register(ElasticsearchDataSource(
+        es_url, index="transactions", timestamp_field="executed_at",
+        mappings=ingest.transactions_mappings()))
+    registry.register(ElasticsearchDataSource(
+        es_url, index="wallets", timestamp_field=None,
+        mappings=ingest.wallets_mappings()))
+    return registry
+
+
+def index_platform_data(db: Database, registry: DataSourceRegistry) -> dict:
+    """Push the operational store's wallets + enriched transactions to ES."""
+    tx_source = registry.get("transactions")
+    wallet_source = registry.get("wallets")
+    tx_rows = ingest.enrich_transactions(db, db.list_transactions())
+    tx_result = tx_source.bulk_index(tx_rows, id_field="transaction_id")
+    w_result = wallet_source.bulk_index(db.list_wallets(), id_field="wallet_id")
+    return {"transactions": tx_result, "wallets": w_result}
+
+
+def create_app(db_path: str = ":memory:", es_url: Optional[str] = None,
+               seed_data: bool = True) -> FastAPI:
+    es_url = es_url or DEFAULT_ES_URL
+    db = Database(db_path)
+    registry = build_registry(es_url)
 
     rules_repo = RuleRepository(db)
     alerts_repo = AlertRepository(db)
     engine = RuleEngine(registry, db, alerts_repo)
     scheduler = RuleScheduler(engine, rules_repo)
 
-    app = FastAPI(title="DYAF — AML & Fraud Detection Platform", version="1.0.0")
+    def setup_indices() -> dict:
+        return {name: registry.get(name).ensure_index()
+                for name in registry.names()}
+
+    # First-run bootstrap: create indices + seed demo data when empty.
+    startup_status: dict = {"es_url": es_url, "reachable": False}
+    if registry.get("transactions").ping():
+        startup_status["reachable"] = True
+        startup_status["indices"] = setup_indices()
+        if seed_data:
+            if not db.query("SELECT 1 FROM wallets LIMIT 1"):
+                seed(db)
+            if registry.get("transactions").count() == 0:
+                startup_status["seeded"] = index_platform_data(db, registry)
+
+    app = FastAPI(title="DYAF — AML & Fraud Detection Platform", version="2.0.0")
     # expose for tests
     app.state.db = db
     app.state.registry = registry
     app.state.engine = engine
     app.state.scheduler = scheduler
+    app.state.startup_status = startup_status
+
+    def get_source(name: str) -> ElasticsearchDataSource:
+        try:
+            return registry.get(name)
+        except KeyError:
+            raise HTTPException(404, f"Unknown datasource '{name}'")
 
     # ------------------------------------------------------------------
     # Rule Builder UI
@@ -70,6 +119,86 @@ def create_app(db_path: str = ":memory:", seed_data: bool = True) -> FastAPI:
     @app.get("/", include_in_schema=False)
     def ui():
         return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+    # ------------------------------------------------------------------
+    # Elasticsearch administration
+    # ------------------------------------------------------------------
+    @app.get("/api/es/health")
+    def es_health():
+        tx = registry.get("transactions")
+        reachable = tx.ping()
+        info = {"es_url": es_url, "reachable": reachable, "indices": {}}
+        if reachable:
+            for name in registry.names():
+                source = registry.get(name)
+                exists = source.index_exists()
+                info["indices"][name] = {
+                    "exists": exists,
+                    "docs": source.count() if exists else 0,
+                }
+        return info
+
+    @app.post("/api/es/setup")
+    def es_setup(seed: bool = False):
+        """Create missing indices (first-run bootstrap); optionally seed demo data."""
+        tx = registry.get("transactions")
+        if not tx.ping():
+            raise HTTPException(503, f"Elasticsearch is not reachable at {es_url}")
+        result = {"indices": setup_indices()}
+        if seed and tx.count() == 0:
+            from ..seed import seed as seed_fn
+            if not db.query("SELECT 1 FROM wallets LIMIT 1"):
+                seed_fn(db)
+            result["seeded"] = index_platform_data(db, registry)
+        return result
+
+    # ------------------------------------------------------------------
+    # CSV template + upload
+    # ------------------------------------------------------------------
+    @app.get("/api/datasources/{name}/csv-template")
+    def csv_template(name: str):
+        get_source(name)
+        try:
+            content = ingest.csv_template(name)
+        except ValueError as e:
+            raise HTTPException(404, str(e))
+        return PlainTextResponse(
+            content, media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{name}_template.csv"'})
+
+    @app.post("/api/datasources/{name}/upload-csv")
+    async def upload_csv(name: str, file: UploadFile = File(...)):
+        source = get_source(name)
+        if not source.ping():
+            raise HTTPException(503, f"Elasticsearch is not reachable at {es_url}")
+        try:
+            content = (await file.read()).decode("utf-8-sig")
+        except UnicodeDecodeError:
+            raise HTTPException(422, "File must be UTF-8 encoded CSV")
+
+        if name == "transactions":
+            rows, errors = ingest.parse_transactions_csv(content)
+            # keep the operational store consistent, then index enriched docs
+            for row in rows:
+                db.insert_transaction(ingest.transaction_model_from_row(dict(row)))
+            docs = ingest.enrich_transactions(db, rows)
+            id_field = "transaction_id"
+        elif name == "wallets":
+            rows, errors = ingest.parse_wallets_csv(content)
+            for row in rows:
+                db.upsert_wallet(ingest.wallet_model_from_row(row))
+            docs = rows
+            id_field = "wallet_id"
+        else:
+            raise HTTPException(422, f"CSV upload is not supported for datasource '{name}'")
+
+        if not rows and errors:
+            raise HTTPException(422, detail=errors)
+        source.ensure_index()
+        result = source.bulk_index(docs, id_field=id_field)
+        return {"datasource": name, "received_rows": len(rows) + len(errors),
+                "indexed": result["indexed"],
+                "errors": errors + [str(e) for e in result["errors"]]}
 
     # ------------------------------------------------------------------
     # Metadata for the Rule Builder (all dynamic — nothing hardcoded)
@@ -83,16 +212,20 @@ def create_app(db_path: str = ":memory:", seed_data: bool = True) -> FastAPI:
             "target_entities": [e.value for e in TargetEntity],
             "severities": [s.value for s in AlertSeverity],
             "time_units": ["minutes", "hours", "days", "weeks"],
+            "es_url": es_url,
         }
 
     @app.get("/api/datasources/{name}/fields")
     def datasource_fields(name: str):
+        source = get_source(name)
         try:
-            source = registry.get(name)
-        except KeyError:
-            raise HTTPException(404, f"Unknown datasource '{name}'")
+            fields = source.get_fields()
+        except ElasticsearchError as e:
+            raise HTTPException(503, str(e))
+        except requests.RequestException:
+            raise HTTPException(503, f"Elasticsearch is not reachable at {es_url}")
         return {"datasource": name, "timestamp_field": source.timestamp_field,
-                "fields": [f.to_dict() for f in source.get_fields()]}
+                "fields": [f.to_dict() for f in fields]}
 
     # ------------------------------------------------------------------
     # Rules
@@ -100,7 +233,7 @@ def create_app(db_path: str = ":memory:", seed_data: bool = True) -> FastAPI:
     def _known_fields(ds_name: str) -> Optional[set]:
         try:
             return registry.get(ds_name).field_names()
-        except KeyError:
+        except Exception:
             return None
 
     def _validate(defn: dict) -> list[str]:
@@ -250,13 +383,34 @@ def create_app(db_path: str = ":memory:", seed_data: bool = True) -> FastAPI:
     return app
 
 
-app = None  # created lazily by `python -m dyaf.api.app` / uvicorn factory
-
-
 def main():  # pragma: no cover
     import uvicorn
-    uvicorn.run(create_app(db_path="dyaf.db"), host="127.0.0.1",
-                port=int(os.environ.get("PORT", 8000)))
+    dev_es = None
+    if os.environ.get("DYAF_DEV_ES", "").lower() in ("1", "true", "yes") \
+            or not os.environ.get("ELASTICSEARCH_URL"):
+        # No cluster configured: start the bundled dev/test double so the
+        # platform is runnable out of the box. Point ELASTICSEARCH_URL at a
+        # real cluster for production use.
+        from ..testing.fake_es import FakeElasticsearch
+        dev_es = FakeElasticsearch(port=9200 if _port_free(9200) else 0).start()
+        os.environ["ELASTICSEARCH_URL"] = dev_es.url
+        print(f"[dyaf] ELASTICSEARCH_URL not set -> started embedded dev ES at {dev_es.url}")
+    try:
+        uvicorn.run(create_app(db_path="dyaf.db", es_url=os.environ.get("ELASTICSEARCH_URL")),
+                    host="127.0.0.1", port=int(os.environ.get("PORT", 8000)))
+    finally:
+        if dev_es:
+            dev_es.stop()
+
+
+def _port_free(port: int) -> bool:  # pragma: no cover
+    import socket
+    with socket.socket() as s:
+        try:
+            s.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
 
 
 if __name__ == "__main__":  # pragma: no cover

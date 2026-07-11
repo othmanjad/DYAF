@@ -1,11 +1,14 @@
-from datetime import datetime, timezone
+"""Rule engine tests running through the real Elasticsearch code path
+(ElasticsearchDataSource against the API-compatible test double)."""
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from dyaf import ingest
 from dyaf.alerts.repository import AlertRepository
 from dyaf.core.database import Database
 from dyaf.datasources.base import DataSourceRegistry
-from dyaf.datasources.sqlite_source import TransactionsDataSource, WalletsDataSource
+from dyaf.datasources.elasticsearch_source import ElasticsearchDataSource
 from dyaf.rules.engine import RuleEngine
 from dyaf.rules.models import Rule, validate_rule
 from dyaf.rules.repository import RuleRepository
@@ -16,12 +19,23 @@ NOW = datetime(2026, 7, 11, 12, 0, 0, tzinfo=timezone.utc)
 
 
 @pytest.fixture()
-def env():
+def env(fake_es):
     db = Database(":memory:")
     seed(db, now=NOW)
+
     registry = DataSourceRegistry()
-    registry.register(TransactionsDataSource(db))
-    registry.register(WalletsDataSource(db))
+    tx = ElasticsearchDataSource(fake_es.url, "transactions",
+                                 mappings=ingest.transactions_mappings())
+    wallets = ElasticsearchDataSource(fake_es.url, "wallets", timestamp_field=None,
+                                      mappings=ingest.wallets_mappings())
+    registry.register(tx)
+    registry.register(wallets)
+    tx.ensure_index()
+    wallets.ensure_index()
+    tx.bulk_index(ingest.enrich_transactions(db, db.list_transactions()),
+                  id_field="transaction_id")
+    wallets.bulk_index(db.list_wallets(), id_field="wallet_id")
+
     engine = RuleEngine(registry, db, AlertRepository(db))
     return db, registry, engine
 
@@ -55,7 +69,6 @@ def test_structuring_rule_fires_for_expected_wallet(env):
     assert alert.rule_result["aggregation_value"] >= 5
     assert len(alert.transaction_ids) > 0
     assert alert.investigation_status == "New"
-    # persisted
     saved = AlertRepository(db).list()
     assert any(a["alert_id"] == alert.alert_id for a in saved)
 
@@ -120,7 +133,7 @@ def test_high_risk_country_rule_uses_denormalized_wallet_fields(env):
         conditions={"logic": "AND", "conditions": [
             {"field": "transaction_type_en", "operator": "eq", "value": "International Remittance"},
             {"field": "merchant_country", "operator": "in", "value": ["IR", "KP", "SY", "MM"]},
-            {"field": "sender_pep_status", "operator": "eq", "value": 1},
+            {"field": "sender_pep_status", "operator": "eq", "value": True},
         ]},
         aggregation={"type": "sum", "field": "amount"},
         threshold={"operator": "gt", "value": 5000},
@@ -189,10 +202,7 @@ def test_scheduler_respects_frequency(env):
 
     first = scheduler.run_pending(now=NOW)
     assert len(first) == 1
-    # 10 minutes later: not due yet
-    from datetime import timedelta
     assert scheduler.run_pending(now=NOW + timedelta(minutes=10)) == []
-    # 1 hour later: due again
     assert len(scheduler.run_pending(now=NOW + timedelta(hours=1))) == 1
 
 

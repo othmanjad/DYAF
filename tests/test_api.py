@@ -5,8 +5,8 @@ from dyaf.api.app import create_app
 
 
 @pytest.fixture()
-def client():
-    return TestClient(create_app(db_path=":memory:", seed_data=True))
+def client(fake_es):
+    return TestClient(create_app(db_path=":memory:", es_url=fake_es.url, seed_data=True))
 
 
 RULE = {

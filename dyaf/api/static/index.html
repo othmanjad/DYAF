@@ -55,6 +55,7 @@ th{color:var(--muted);font-size:11px;text-transform:uppercase}
     <button data-tab="builder" class="active">Rule Builder</button>
     <button data-tab="rules">Rules</button>
     <button data-tab="alerts">Alerts</button>
+    <button data-tab="data">Data</button>
     <button data-tab="settings">Internal Wallets</button>
   </nav>
 </header>
@@ -135,6 +136,50 @@ th{color:var(--muted);font-size:11px;text-transform:uppercase}
   </div>
 </section>
 
+<!-- ======================= DATA TAB ======================= -->
+<section id="tab-data" class="hidden">
+  <div class="panel">
+    <h2>Elasticsearch Cluster</h2>
+    <div id="es-health" style="font-size:13px">Loading…</div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn primary" onclick="esSetup(false)">Create Missing Indices</button>
+      <button class="btn" onclick="esSetup(true)">Create Indices + Seed Demo Data</button>
+      <button class="btn subtle" onclick="loadEsHealth()">Refresh</button>
+    </div>
+    <div id="es-msg"></div>
+  </div>
+
+  <div class="panel">
+    <h2>CSV Import</h2>
+    <p style="font-size:13px;color:var(--muted)">
+      Download the template, fill it, then upload — rows are validated, enriched and indexed into Elasticsearch.
+      Extra columns are allowed and automatically become searchable rule fields.
+      Upload <b>wallets</b> before <b>transactions</b> so enrichment can resolve wallet attributes.</p>
+    <div class="grid">
+      <div>
+        <label>Datasource</label>
+        <select id="csv-ds">
+          <option value="transactions">transactions</option>
+          <option value="wallets">wallets</option>
+        </select>
+      </div>
+      <div>
+        <label>Template</label>
+        <button class="btn" onclick="downloadTemplate()">⬇ Download CSV Template</button>
+      </div>
+      <div>
+        <label>Upload CSV File</label>
+        <input type="file" id="csv-file" accept=".csv,text/csv">
+      </div>
+      <div>
+        <label>&nbsp;</label>
+        <button class="btn primary" onclick="uploadCsv()">⬆ Upload &amp; Index</button>
+      </div>
+    </div>
+    <div id="csv-msg"></div>
+  </div>
+</section>
+
 <!-- ======================= SETTINGS TAB ======================= -->
 <section id="tab-settings" class="hidden">
   <div class="panel">
@@ -163,8 +208,9 @@ async function api(path,opts){const r=await fetch(path,opts);const t=await r.tex
 /* ---------------- tabs ---------------- */
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("nav button").forEach(x=>x.classList.remove("active"));b.classList.add("active");
-  ["builder","rules","alerts","settings"].forEach(t=>$("tab-"+t).classList.toggle("hidden",t!==b.dataset.tab));
+  ["builder","rules","alerts","data","settings"].forEach(t=>$("tab-"+t).classList.toggle("hidden",t!==b.dataset.tab));
   if(b.dataset.tab==="rules")loadRules(); if(b.dataset.tab==="alerts")loadAlerts(); if(b.dataset.tab==="settings")loadInternalWallets();
+  if(b.dataset.tab==="data")loadEsHealth();
 });
 
 /* ---------------- condition builder (recursive, drag & drop) ---------------- */
@@ -338,6 +384,31 @@ async function loadAlerts(){const alerts=await api("/api/alerts");
     <td><select onchange='setStatus("${a.alert_id}",this.value)'>${STATUSES.map(s=>`<option ${s===a.investigation_status?"selected":""}>${s}</option>`).join("")}</select></td></tr>`).join("")||"<tr><td colspan=9>No alerts</td></tr>"}
 async function setStatus(id,s){await api("/api/alerts/"+id+"/status",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({investigation_status:s})})}
 
+/* ---------------- data tab (ES + CSV) ---------------- */
+async function loadEsHealth(){try{const h=await api("/api/es/health");
+  let html=`<b>URL:</b> ${h.es_url} &nbsp; <b>Status:</b> ${h.reachable?'<span class="tag Low">reachable</span>':'<span class="tag Critical">unreachable</span>'}`;
+  if(h.reachable){html+='<table style="margin-top:8px"><thead><tr><th>Index</th><th>Exists</th><th>Documents</th></tr></thead><tbody>';
+    for(const[k,v]of Object.entries(h.indices))html+=`<tr><td>${k}</td><td>${v.exists?"✔":"✕ (not created yet)"}</td><td>${v.docs}</td></tr>`;
+    html+="</tbody></table>"}
+  $("es-health").innerHTML=html}catch(e){$("es-health").innerHTML=`<div class="msg err">${e.message}</div>`}}
+
+async function esSetup(seed){try{const r=await api("/api/es/setup?seed="+seed,{method:"POST"});
+  const created=Object.entries(r.indices).filter(([k,v])=>v.created).map(([k])=>k);
+  let m=created.length?`✔ Created index(es): ${created.join(", ")}`:"✔ All indices already exist";
+  if(r.seeded)m+=` · seeded ${r.seeded.transactions.indexed} transactions, ${r.seeded.wallets.indexed} wallets`;
+  msg("es-msg",m,true);loadEsHealth()}catch(e){msg("es-msg",e.message,false)}}
+
+function downloadTemplate(){window.location="/api/datasources/"+$("csv-ds").value+"/csv-template"}
+
+async function uploadCsv(){const f=$("csv-file").files[0];
+  if(!f){msg("csv-msg","Choose a CSV file first",false);return}
+  const fd=new FormData();fd.append("file",f);
+  try{const r=await api("/api/datasources/"+$("csv-ds").value+"/upload-csv",{method:"POST",body:fd});
+    let m=`✔ Indexed ${r.indexed} of ${r.received_rows} rows into '${r.datasource}'`;
+    if(r.errors.length)m+=`\nWarnings:\n`+r.errors.join("\n");
+    msg("csv-msg",m,r.errors.length===0);$("csv-file").value="";loadEsHealth()}
+  catch(e){msg("csv-msg",e.message,false)}}
+
 /* ---------------- settings tab ---------------- */
 async function loadInternalWallets(){const iw=await api("/api/internal-wallets");
   $("iw-body").innerHTML=iw.map(w=>`<tr><td>${w.wallet_id}</td><td>${w.name}</td><td>${w.description}</td>
@@ -351,7 +422,11 @@ async function delIW(id){await api("/api/internal-wallets/"+id,{method:"DELETE"}
 function fill(sel,items,val,label){const s=$(sel);s.innerHTML="";items.forEach(i=>{const o=document.createElement("option");
   o.value=val?i[val]:i;o.textContent=label?label(i):(val?i[val]:i);s.appendChild(o)})}
 
-async function loadFields(){const r=await api("/api/datasources/"+$("r-ds").value+"/fields");FIELDS=r.fields;
+async function loadFields(){
+  let r;
+  try{r=await api("/api/datasources/"+$("r-ds").value+"/fields")}
+  catch(e){msg("builder-msg","Cannot load fields from Elasticsearch: "+e.message+"\nGo to the Data tab to create the indices first.",false);FIELDS=[];renderAll();return}
+  FIELDS=r.fields;
   fill("r-groupby",FIELDS,"name",f=>`${f.name} (${f.type})`);
   fill("r-agg-field",FIELDS.filter(f=>["double","long"].includes(f.type)),"name",f=>`${f.name} (${f.type})`);
   const m=$("r-agg-measure");m.innerHTML='<option value="">— count —</option>';

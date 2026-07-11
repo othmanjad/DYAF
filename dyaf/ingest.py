@@ -1,0 +1,240 @@
+"""Ingest layer: index bootstrap mappings, document enrichment, and CSV
+import/export for the Elasticsearch detection indices.
+
+Transactions are stored in Elasticsearch already *enriched* (denormalized
+with sender/receiver wallet attributes, transaction type names and the
+internal-wallet classification), the way a production ingest pipeline
+would write them. Enrichment happens here at ingest time — seeding and
+CSV upload share the same path.
+"""
+from __future__ import annotations
+
+import csv
+import io
+from dataclasses import fields as dc_fields
+from typing import Optional
+
+from .core.database import Database
+from .core.models import Transaction, Wallet
+
+# ----------------------------------------------------------------------
+# Base (uploadable) columns — derived from the platform dataclasses,
+# not hand-maintained lists.
+# ----------------------------------------------------------------------
+
+_NUMERIC_TX = {"amount": float, "fee": float, "transaction_type_id": int}
+_REQUIRED_TX = ("transaction_id", "sender_wallet_id", "receiver_wallet_id",
+                "amount", "executed_at", "transaction_type_id")
+_REQUIRED_WALLET = ("wallet_id", "owner_name")
+
+_SAMPLE_ROWS = {
+    "transactions": {
+        "transaction_id": "TX-100001", "sender_wallet_id": "W-1001",
+        "receiver_wallet_id": "W-2001", "amount": "9500.00",
+        "executed_at": "2026-07-10T14:30:00", "transaction_type_id": "3",
+        "reference_number": "REF-00100001", "fee": "47.50", "currency": "USD",
+        "merchant_id": "", "merchant_name": "", "merchant_category": "",
+        "merchant_country": "",
+    },
+    "wallets": {
+        "wallet_id": "W-1001", "owner_name": "Ahmad Khalil", "nationality": "JO",
+        "residence_country": "JO", "date_of_birth": "1988-04-12",
+        "risk_rating": "Medium", "kyc_status": "Verified", "pep_status": "false",
+        "wallet_type": "Customer Wallet",
+    },
+}
+
+
+def transaction_csv_columns() -> list[str]:
+    return [f.name for f in dc_fields(Transaction) if f.name != "extra"]
+
+
+def wallet_csv_columns() -> list[str]:
+    return [f.name for f in dc_fields(Wallet)]
+
+
+def csv_template(datasource: str) -> str:
+    """CSV template (header + one sample row) for a detection datasource."""
+    if datasource == "transactions":
+        cols = transaction_csv_columns()
+    elif datasource == "wallets":
+        cols = wallet_csv_columns()
+    else:
+        raise ValueError(f"No CSV template for datasource '{datasource}'")
+    sample = _SAMPLE_ROWS[datasource]
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=cols)
+    writer.writeheader()
+    writer.writerow({c: sample.get(c, "") for c in cols})
+    return buf.getvalue()
+
+
+# ----------------------------------------------------------------------
+# Elasticsearch index mappings (bootstrap on first run)
+# ----------------------------------------------------------------------
+
+def _wallet_properties() -> dict:
+    return {
+        "wallet_id": {"type": "keyword"},
+        "owner_name": {"type": "keyword"},
+        "nationality": {"type": "keyword"},
+        "residence_country": {"type": "keyword"},
+        "date_of_birth": {"type": "date", "ignore_malformed": True},
+        "risk_rating": {"type": "keyword"},
+        "kyc_status": {"type": "keyword"},
+        "pep_status": {"type": "boolean"},
+        "wallet_type": {"type": "keyword"},
+    }
+
+
+def transactions_mappings() -> dict:
+    props = {
+        "transaction_id": {"type": "keyword"},
+        "sender_wallet_id": {"type": "keyword"},
+        "receiver_wallet_id": {"type": "keyword"},
+        "amount": {"type": "double"},
+        "executed_at": {"type": "date"},
+        "transaction_type_id": {"type": "long"},
+        "reference_number": {"type": "keyword"},
+        "fee": {"type": "double"},
+        "currency": {"type": "keyword"},
+        "merchant_id": {"type": "keyword"},
+        "merchant_name": {"type": "keyword"},
+        "merchant_category": {"type": "keyword"},
+        "merchant_country": {"type": "keyword"},
+        "transaction_type_en": {"type": "keyword"},
+        "transaction_type_ar": {"type": "keyword"},
+        "sender_internal_wallet_name": {"type": "keyword"},
+        "receiver_internal_wallet_name": {"type": "keyword"},
+    }
+    for prefix in ("sender", "receiver"):
+        for name, spec in _wallet_properties().items():
+            if name != "wallet_id":
+                props[f"{prefix}_{name}"] = dict(spec)
+    return {
+        "dynamic": True,
+        # extra CSV columns become searchable keyword/double fields automatically
+        "dynamic_templates": [
+            {"strings_as_keywords": {
+                "match_mapping_type": "string",
+                "mapping": {"type": "keyword"}}},
+        ],
+        "properties": props,
+    }
+
+
+def wallets_mappings() -> dict:
+    return {
+        "dynamic": True,
+        "dynamic_templates": [
+            {"strings_as_keywords": {
+                "match_mapping_type": "string",
+                "mapping": {"type": "keyword"}}},
+        ],
+        "properties": _wallet_properties(),
+    }
+
+
+# ----------------------------------------------------------------------
+# Enrichment (shared by seeding + CSV upload)
+# ----------------------------------------------------------------------
+
+def enrich_transactions(db: Database, rows: list[dict]) -> list[dict]:
+    """Denormalize wallet, type and internal-wallet data onto transaction docs."""
+    wallets = {w["wallet_id"]: w for w in db.list_wallets()}
+    types = {t["type_id"]: t for t in db.list_transaction_types()}
+    internal = {iw["wallet_id"]: iw for iw in db.list_internal_wallets()}
+    for r in rows:
+        for prefix, key in (("sender", "sender_wallet_id"), ("receiver", "receiver_wallet_id")):
+            w = wallets.get(r.get(key)) or {}
+            for wk, wv in w.items():
+                if wk != "wallet_id":
+                    r[f"{prefix}_{wk}"] = wv
+            iw = internal.get(r.get(key))
+            r[f"{prefix}_internal_wallet_name"] = iw["name"] if iw else None
+        t = types.get(r.get("transaction_type_id")) or {}
+        r["transaction_type_en"] = t.get("name_en")
+        r["transaction_type_ar"] = t.get("name_ar")
+    return rows
+
+
+# ----------------------------------------------------------------------
+# CSV parsing
+# ----------------------------------------------------------------------
+
+def _coerce(value: str):
+    if value is None:
+        return None
+    v = value.strip()
+    if v == "":
+        return None
+    low = v.lower()
+    if low in ("true", "false"):
+        return low == "true"
+    try:
+        return int(v) if v.lstrip("+-").isdigit() else float(v)
+    except ValueError:
+        return v
+
+
+def parse_csv(content: str, required: tuple[str, ...]) -> tuple[list[dict], list[str]]:
+    """Parse CSV text into typed row dicts; returns (rows, errors)."""
+    errors: list[str] = []
+    try:
+        reader = csv.DictReader(io.StringIO(content))
+        header = reader.fieldnames or []
+    except csv.Error as e:
+        return [], [f"Invalid CSV: {e}"]
+    missing = [c for c in required if c not in header]
+    if missing:
+        return [], [f"Missing required column(s): {', '.join(missing)}"]
+
+    rows: list[dict] = []
+    for i, raw in enumerate(reader, start=2):  # header is line 1
+        row = {k: _coerce(v) for k, v in raw.items() if k is not None and k != ""}
+        empty = [c for c in required if row.get(c) in (None, "")]
+        if empty:
+            errors.append(f"line {i}: missing value(s) for {', '.join(empty)}")
+            continue
+        rows.append(row)
+    return rows, errors
+
+
+def parse_transactions_csv(content: str) -> tuple[list[dict], list[str]]:
+    rows, errors = parse_csv(content, _REQUIRED_TX)
+    valid = []
+    for row in rows:
+        try:
+            for col, cast in _NUMERIC_TX.items():
+                if row.get(col) is not None:
+                    row[col] = cast(row[col])
+            valid.append(row)
+        except (TypeError, ValueError):
+            errors.append(f"transaction {row.get('transaction_id')}: non-numeric "
+                          f"value in {', '.join(_NUMERIC_TX)}")
+    return valid, errors
+
+
+def parse_wallets_csv(content: str) -> tuple[list[dict], list[str]]:
+    rows, errors = parse_csv(content, _REQUIRED_WALLET)
+    for row in rows:
+        row["pep_status"] = bool(row.get("pep_status"))
+    return rows, errors
+
+
+# ----------------------------------------------------------------------
+# Row -> platform model conversion (for the operational SQLite store)
+# ----------------------------------------------------------------------
+
+def transaction_model_from_row(row: dict) -> Transaction:
+    base = set(transaction_csv_columns())
+    kwargs = {k: row[k] for k in base if k in row and row[k] is not None}
+    extra = {k: v for k, v in row.items() if k not in base and v is not None}
+    kwargs.setdefault("reference_number", "")
+    return Transaction(extra=extra, **kwargs)
+
+
+def wallet_model_from_row(row: dict) -> Wallet:
+    base = set(wallet_csv_columns())
+    kwargs = {k: row[k] for k in base if k in row and row[k] is not None}
+    return Wallet(**kwargs)
