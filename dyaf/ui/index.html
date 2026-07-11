@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DYAF — TMS Rule Builder (SELECT)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{--bg:#f4f6fa;--panel:#fff;--line:#dde3ec;--ink:#1c2733;--muted:#5b6b7d;--accent:#155eef;--danger:#d92d20;--ok:#079455;--warn:#b54708;--code:#0d1b2e}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+header{background:var(--code);color:#fff;padding:14px 24px;display:flex;align-items:center;gap:14px}
+header h1{font-size:17px;margin:0}
+header .sub{color:#9fb3cc;font-size:12px}
+nav{display:flex;gap:4px;margin-left:auto;flex-wrap:wrap}
+nav button{background:transparent;border:1px solid #33445c;color:#cdd9e8;padding:6px 13px;border-radius:6px;cursor:pointer;font-size:13px}
+nav button.active{background:var(--accent);border-color:var(--accent);color:#fff}
+main{padding:20px 24px;max-width:1320px;margin:0 auto}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:16px}
+.panel h2{margin:0 0 12px;font-size:15px}
+.kw{color:var(--accent);font-weight:700;font-size:12px;letter-spacing:.06em}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+label{display:block;font-size:11px;color:var(--muted);margin-bottom:3px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+input,select{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:6px;font-size:13px;background:#fff;color:var(--ink)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button.btn{padding:8px 14px;border:1px solid var(--line);border-radius:7px;background:#fff;cursor:pointer;font-size:13px}
+button.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.btn.subtle{font-size:12px;padding:4px 9px}
+button.btn.danger{color:var(--danger);border-color:#f3c1bc}
+.group{border:1px dashed #b9c6d8;border-radius:8px;padding:10px;margin:8px 0;background:#f8fafd}
+.group>.ghead{display:flex;gap:8px;align-items:center;margin-bottom:6px}
+.cond,.aggrow,.hrow{display:flex;gap:6px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:7px;padding:6px;margin:6px 0}
+.cond{cursor:grab}.cond.dragging{opacity:.4}
+.cond select,.cond input,.aggrow select,.aggrow input,.hrow select,.hrow input{width:auto;flex:1;min-width:80px}
+.chip{display:inline-flex;align-items:center;gap:6px;background:#eef2f8;border-radius:14px;padding:3px 10px;font-size:12.5px;margin:2px}
+.chip b{cursor:pointer;color:var(--danger)}
+pre{background:var(--code);color:#c8e1ff;padding:14px;border-radius:8px;font-size:12px;overflow:auto;max-height:400px}
+pre.sql{color:#a7f3d0;font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-size:11px;text-transform:uppercase}
+.tag{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11.5px;font-weight:600}
+.tag.High,.tag.Critical{background:#fee4e2;color:var(--danger)}
+.tag.Medium{background:#fef0c7;color:var(--warn)}
+.tag.Low{background:#d1fadf;color:var(--ok)}
+.msg{padding:10px 12px;border-radius:7px;font-size:13px;margin:10px 0;white-space:pre-wrap}
+.msg.err{background:#fee4e2;color:#912018}
+.msg.ok{background:#d1fadf;color:#054f31}
+.hidden{display:none}
+.pill{font-size:11px;background:#eef2f8;border-radius:12px;padding:2px 8px;color:var(--muted)}
+.subsec{border-left:3px solid var(--line);padding-left:12px;margin:8px 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>DYAF</h1><span class="sub">Transaction Monitoring — every rule is a SELECT</span>
+  <nav>
+    <button data-tab="builder" class="active">Rule Builder</button>
+    <button data-tab="rules">Rules</button>
+    <button data-tab="alerts">Alerts</button>
+    <button data-tab="data">Data</button>
+    <button data-tab="settings">Internal Wallets</button>
+  </nav>
+</header>
+<main>
+
+<!-- ================== BUILDER ================== -->
+<section id="tab-builder">
+  <div class="panel">
+    <h2>Rule</h2>
+    <div class="grid">
+      <div><label>Name</label><input id="r-name" placeholder="Cash Structuring"></div>
+      <div><label>Scenario Ref (TM-xx)</label><input id="r-scenario" placeholder="TM-01"></div>
+      <div><label>Risk Score</label><input id="r-risk" type="number" value="70"></div>
+      <div><label>Severity</label><select id="r-sev"></select></div>
+      <div><label>Frequency</label><div class="row"><input id="r-fq-v" type="number" value="1" style="width:64px"><select id="r-fq-u" style="width:104px"></select></div></div>
+    </div>
+    <div style="margin-top:8px"><label>Description</label><input id="r-desc"></div>
+  </div>
+
+  <div class="panel">
+    <h2><span class="kw">FROM</span> datasource &nbsp;·&nbsp; <span class="kw">WINDOW</span></h2>
+    <div class="row">
+      <select id="r-from" style="width:240px"></select>
+      <span class="pill">time window</span>
+      <input id="r-tw-v" type="number" value="7" style="width:70px">
+      <select id="r-tw-u" style="width:110px"></select>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2><span class="kw">WHERE</span> <span class="pill">optional filter — values suggested from the index, dates support now-7d presets, lists via @name</span></h2>
+    <div id="where-root"></div>
+  </div>
+
+  <div class="panel">
+    <h2><span class="kw">GROUP BY</span> <span class="pill">0 fields = alert per record · multiple fields = composite entity (e.g. wallet × country)</span></h2>
+    <div class="row"><select id="gb-pick" style="width:280px"></select>
+      <button class="btn subtle" onclick="addGroupBy()">+ Add</button></div>
+    <div id="gb-chips" style="margin-top:6px"></div>
+  </div>
+
+  <div class="panel">
+    <h2><span class="kw">SELECT</span> named aggregates <span class="pill">each may have its own FILTER (e.g. is_debit = true, executed_at ≥ now-7d)</span></h2>
+    <div id="sel-rows"></div>
+    <button class="btn subtle" onclick="addAggregate()">+ Aggregate</button>
+  </div>
+
+  <div class="panel">
+    <h2><span class="kw">HAVING</span> <span class="pill">free comparisons between aggregates — builder rows or advanced text</span></h2>
+    <div id="hv-rows"></div>
+    <div class="row">
+      <button class="btn subtle" onclick="addHavingRow()">+ Condition</button>
+      <label style="margin:0;display:flex;align-items:center;gap:6px;text-transform:none">
+        <input type="checkbox" id="hv-adv" style="width:auto" onchange="renderHaving()"> advanced text</label>
+    </div>
+    <input id="hv-text" class="hidden" placeholder="debit_sum > credit_sum AND cnt >= 3" style="margin-top:8px;font-family:monospace">
+    <div id="hv-preview" style="margin-top:8px;font-family:monospace;font-size:13px;color:var(--muted)"></div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <button class="btn" onclick="doValidate()">Validate</button>
+      <button class="btn" onclick="doPreview()">Preview SQL + ES Query</button>
+      <button class="btn" onclick="doTest()">Test Rule</button>
+      <button class="btn primary" onclick="doSave()">Save Rule</button>
+      <span id="edit-pill" class="pill hidden"></span>
+      <button class="btn subtle hidden" id="btn-new" onclick="resetBuilder()">New rule</button>
+    </div>
+    <div id="b-msg"></div>
+    <div id="prev-wrap" class="hidden">
+      <h2>SQL</h2><pre class="sql" id="prev-sql"></pre>
+      <h2>Elasticsearch Query</h2><pre id="prev-es"></pre>
+    </div>
+    <div id="test-wrap" class="hidden">
+      <h2>Test Result (dry run)</h2><div id="test-sum"></div><pre id="test-json"></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ================== RULES ================== -->
+<section id="tab-rules" class="hidden">
+  <div class="panel">
+    <h2>Rule Catalog <button class="btn subtle" style="float:right" onclick="runScheduler()">Run Scheduler Now</button></h2>
+    <p style="font-size:12.5px;color:var(--muted)">The TM-xx templates from the scenario catalog ship pre-loaded (disabled). Enable, tune or copy them.</p>
+    <div id="rules-msg"></div>
+    <table><thead><tr><th>Scenario</th><th>Name</th><th>Ver</th><th>Query</th><th>Severity</th><th>Enabled</th><th></th></tr></thead>
+    <tbody id="rules-body"></tbody></table>
+  </div>
+</section>
+
+<!-- ================== ALERTS ================== -->
+<section id="tab-alerts" class="hidden">
+  <div class="panel">
+    <h2>Alerts</h2>
+    <table><thead><tr><th>Alert</th><th>Rule (ver)</th><th>Entity</th><th>Customer</th><th>Values</th><th>Score</th><th>Severity</th><th>Detected</th><th>Status</th></tr></thead>
+    <tbody id="alerts-body"></tbody></table>
+  </div>
+</section>
+
+<!-- ================== DATA ================== -->
+<section id="tab-data" class="hidden">
+  <div class="panel">
+    <h2>Elasticsearch</h2>
+    <div id="es-health">Loading…</div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn primary" onclick="esSetup(false)">Create Missing Indices</button>
+      <button class="btn" onclick="esSetup(true)">Create + Seed Demo Data</button>
+      <button class="btn subtle" onclick="loadEsHealth()">Refresh</button>
+    </div>
+    <div id="es-msg"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Datasources <span class="pill">any ES index becomes a rule source; JOINs denormalize reference data at indexing time</span></h2>
+    <table><thead><tr><th>Name</th><th>Index</th><th>Timestamp</th><th>ID Field</th><th>Required CSV Columns</th><th>Joins</th><th></th></tr></thead>
+    <tbody id="ds-body"></tbody></table>
+    <h2 style="margin-top:14px">Add Datasource</h2>
+    <div class="grid">
+      <div><label>Name</label><input id="nds-name"></div>
+      <div><label>ES Index</label><input id="nds-index" placeholder="= name"></div>
+      <div><label>Timestamp Field</label><input id="nds-ts"></div>
+      <div><label>ID Field</label><input id="nds-id"></div>
+      <div><label>Required CSV Columns</label><input id="nds-req" placeholder="a,b,c"></div>
+    </div>
+    <label style="margin-top:8px">Joins</label>
+    <div id="nds-joins"></div>
+    <div class="row" style="margin-top:6px">
+      <button class="btn subtle" onclick="addJoinRow()">+ Join</button>
+      <button class="btn primary" onclick="saveDatasource()">Create Datasource</button>
+    </div>
+    <div id="ds-msg"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Computed Fields <span class="pill">dynamic fields from expressions, e.g. is_round = amount % 1000 == 0</span></h2>
+    <table><thead><tr><th>Datasource</th><th>Name</th><th>Expression</th><th></th></tr></thead>
+    <tbody id="cf-body"></tbody></table>
+    <div class="row" style="margin-top:8px">
+      <select id="cf-ds" style="width:170px"></select>
+      <input id="cf-name" placeholder="field name" style="width:170px">
+      <input id="cf-expr" placeholder="amount % 1000 == 0" style="flex:1;font-family:monospace">
+      <button class="btn primary" onclick="saveComputed()">Add</button>
+    </div>
+    <div id="cf-msg"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Named Lists <span class="pill">use in conditions as @name — high-risk countries, MCC groups…</span></h2>
+    <table><thead><tr><th>Name</th><th>Values</th><th>Description</th><th></th></tr></thead>
+    <tbody id="ls-body"></tbody></table>
+    <div class="row" style="margin-top:8px">
+      <input id="ls-name" placeholder="list name" style="width:170px">
+      <input id="ls-values" placeholder="IR, KP, SY, MM" style="flex:1">
+      <input id="ls-desc" placeholder="description" style="width:220px">
+      <button class="btn primary" onclick="saveList()">Save List</button>
+    </div>
+    <div id="ls-msg"></div>
+  </div>
+
+  <div class="panel">
+    <h2>CSV Import</h2>
+    <div class="grid">
+      <div><label>Datasource</label><select id="csv-ds"></select></div>
+      <div><label>Template</label><button class="btn" onclick="downloadTemplate()">⬇ Download CSV Template</button></div>
+      <div><label>File</label><input type="file" id="csv-file" accept=".csv,text/csv"></div>
+      <div><label>&nbsp;</label><button class="btn primary" onclick="uploadCsv()">⬆ Upload &amp; Index</button></div>
+    </div>
+    <div id="csv-msg"></div>
+  </div>
+</section>
+
+<!-- ================== SETTINGS ================== -->
+<section id="tab-settings" class="hidden">
+  <div class="panel">
+    <h2>Internal Wallet Classification</h2>
+    <div class="grid">
+      <div><label>Wallet ID</label><input id="iw-id"></div>
+      <div><label>Name</label><input id="iw-name"></div>
+      <div><label>Description</label><input id="iw-desc"></div>
+    </div>
+    <div class="row" style="margin-top:8px"><button class="btn primary" onclick="saveIW()">Save</button></div>
+    <div id="iw-msg"></div>
+    <table style="margin-top:10px"><thead><tr><th>Wallet</th><th>Name</th><th>Description</th><th></th></tr></thead>
+    <tbody id="iw-body"></tbody></table>
+  </div>
+</section>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+let META=null,FIELDS=[],editingId=null,dlSeq=0;
+const VC={};
+
+async function api(path,opts){const r=await fetch(path,opts);const t=await r.text();
+  let j=null;try{j=t?JSON.parse(t):null}catch(e){}
+  if(!r.ok){const d=(j&&(j.detail||j.errors||j.error))||t;
+    throw new Error(Array.isArray(d)?d.join("\n"):(typeof d==="object"?JSON.stringify(d):String(d)))}
+  return j}
+function msg(el,text,ok){$(el).innerHTML=`<div class="msg ${ok?"ok":"err"}">${text}</div>`}
+function fill(sel,items,val,label){const s=$(sel);s.innerHTML="";items.forEach(i=>{const o=document.createElement("option");
+  o.value=val?i[val]:i;o.textContent=label?label(i):(val?i[val]:i);s.appendChild(o)})}
+
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("nav button").forEach(x=>x.classList.remove("active"));b.classList.add("active");
+  ["builder","rules","alerts","data","settings"].forEach(t=>$("tab-"+t).classList.toggle("hidden",t!==b.dataset.tab));
+  if(b.dataset.tab==="rules")loadRules();if(b.dataset.tab==="alerts")loadAlerts();
+  if(b.dataset.tab==="data"){loadEsHealth();loadDatasources();loadComputed();loadLists()}
+  if(b.dataset.tab==="settings")loadIW();
+});
+
+/* =============== condition tree builder (WHERE + FILTERs) =============== */
+function newGroup(l){return{logic:l||"AND",conditions:[]}}
+let whereTree=newGroup("AND");
+
+async function fieldValues(field){const ds=$("r-from").value,key=ds+"|"+field;
+  if(!(key in VC)){try{const r=await api(`/api/datasources/${ds}/fields/${encodeURIComponent(field)}/values`);VC[key]=r.values||[]}catch(e){VC[key]=[]}}
+  return VC[key]}
+
+function renderGroup(node,container,onChange,depth){
+  container.innerHTML="";
+  const g=document.createElement("div");g.className="group";
+  const head=document.createElement("div");head.className="ghead";
+  const sel=document.createElement("select");sel.style.width="90px";
+  ["AND","OR","NOT"].forEach(l=>{const o=document.createElement("option");o.value=l;o.textContent=l;sel.appendChild(o)});
+  sel.value=node.logic;sel.onchange=()=>{node.logic=sel.value;onChange()};
+  head.appendChild(sel);
+  const addC=document.createElement("button");addC.className="btn subtle";addC.textContent="+ Condition";
+  addC.onclick=()=>{node.conditions.push({field:FIELDS[0]?.name||"",operator:"eq",value:""});onChange()};
+  const addG=document.createElement("button");addG.className="btn subtle";addG.textContent="+ Group";
+  addG.onclick=()=>{node.conditions.push(newGroup("OR"));onChange()};
+  head.append(addC,addG);
+  if(depth>0){const del=document.createElement("button");del.className="btn subtle danger";del.textContent="✕ group";
+    del.onclick=()=>{node._rm&&node._rm();onChange()};head.appendChild(del)}
+  g.appendChild(head);
+  node.conditions.forEach((child,i)=>{
+    child._rm=()=>node.conditions.splice(i,1);
+    if(child.logic!==undefined){const sub=document.createElement("div");g.appendChild(sub);renderGroup(child,sub,onChange,depth+1)}
+    else g.appendChild(renderCond(child,node,i,onChange));
+  });
+  container.appendChild(g);
+}
+
+function renderCond(c,parent,idx,onChange){
+  const row=document.createElement("div");row.className="cond";row.draggable=true;
+  row.ondragstart=e=>{row.classList.add("dragging");e.dataTransfer.setData("text/plain",idx)};
+  row.ondragend=()=>row.classList.remove("dragging");
+  row.ondragover=e=>e.preventDefault();
+  row.ondrop=e=>{e.preventDefault();const from=+e.dataTransfer.getData("text/plain");
+    if(from!==idx){const[m]=parent.conditions.splice(from,1);parent.conditions.splice(idx,0,m);onChange()}};
+  const f=document.createElement("select");
+  FIELDS.forEach(fl=>{const o=document.createElement("option");o.value=fl.name;o.textContent=`${fl.name} (${fl.type})`;f.appendChild(o)});
+  f.value=c.field;row.appendChild(f);
+  const op=document.createElement("select");
+  META.operators.forEach(o2=>{const o=document.createElement("option");o.value=o2.name;o.textContent=o2.name;op.appendChild(o)});
+  op.value=c.operator;row.appendChild(op);
+  const REL=["now","now-1h","now-6h","now-24h","now-3d","now-7d","now-14d","now-30d","now-90d","now-180d","now-365d"];
+  const rel=document.createElement("select");rel.style.display="none";rel.style.flex="0 0 140px";
+  rel.innerHTML='<option value="abs">exact date…</option>'+REL.map(r=>`<option>${r}</option>`).join("");
+  if(typeof c.value==="string"&&c.value.startsWith("now"))rel.value=c.value;
+  const dl=document.createElement("datalist");dl.id="dl"+(++dlSeq);row.appendChild(dl);
+  const v=document.createElement("input");v.placeholder="value · comma list · @list";
+  v.value=Array.isArray(c.value)?c.value.join(","):(c.value??"");
+  const ftype=()=>((FIELDS.find(x=>x.name===f.value)||{}).type);
+  const sugg=async()=>{if(["keyword","boolean","text"].includes(ftype())){
+      const vals=await fieldValues(f.value);
+      dl.innerHTML=(META.lists.map(l=>`<option value="@${l}">`).join(""))+vals.map(x=>`<option value="${String(x).replace(/"/g,"&quot;")}">`).join("");
+      v.setAttribute("list",dl.id)}else{v.removeAttribute("list")}};
+  const sync=()=>{const needs=(META.operators.find(x=>x.name===op.value)||{}).requires_value!==false;
+    const isDate=ftype()==="date"&&["gt","gte","lt","lte","eq","neq"].includes(op.value);
+    rel.style.display=(isDate&&needs)?"":"none";
+    if(isDate&&rel.value!=="abs"){v.style.display="none";c.value=rel.value;return}
+    v.style.display=needs?"":"none";
+    const nt=isDate?"datetime-local":"text";if(v.type!==nt)v.type=nt;
+    const raw=v.value;
+    if(raw.startsWith("@")){c.value=raw}
+    else if(["in","not_in","between"].includes(op.value)){c.value=raw.split(",").map(s=>s.trim()).filter(Boolean).map(s=>s.toLowerCase()==="true"?true:s.toLowerCase()==="false"?false:isNaN(+s)?s:+s)}
+    else if(isDate||ftype()==="date"){c.value=raw}
+    else if(raw.toLowerCase()==="true"||raw.toLowerCase()==="false"){c.value=raw.toLowerCase()==="true"}
+    else c.value=raw!==""&&!isNaN(+raw)?+raw:raw};
+  f.onchange=()=>{c.field=f.value;sync();sugg()};
+  op.onchange=()=>{c.operator=op.value;sync()};
+  rel.onchange=sync;v.oninput=sync;v.onchange=sync;sync();sugg();
+  row.append(rel,v);
+  const del=document.createElement("button");del.className="btn subtle danger";del.textContent="✕";
+  del.onclick=()=>{parent.conditions.splice(idx,1);onChange()};row.appendChild(del);
+  return row;
+}
+function cleanTree(n){if(!n)return null;if(n.logic!==undefined){const kids=n.conditions.map(cleanTree).filter(Boolean);
+  return kids.length?{logic:n.logic,conditions:kids}:null}
+  return n.field?{field:n.field,operator:n.operator,value:n.value}:null}
+
+/* =============== GROUP BY chips =============== */
+let groupBy=[];
+function addGroupBy(){const f=$("gb-pick").value;if(f&&!groupBy.includes(f)){groupBy.push(f);renderChips()}}
+function renderChips(){$("gb-chips").innerHTML=groupBy.map((g,i)=>
+  `<span class="chip">${g}<b onclick="groupBy.splice(${i},1);renderChips()">✕</b></span>`).join("")
+  ||'<span class="pill">— per record (match mode) —</span>'}
+
+/* =============== SELECT aggregates =============== */
+let aggregates=[]; // {name,func,field,filter}
+function addAggregate(){aggregates.push({name:"agg"+(aggregates.length+1),func:"count",field:"",filter:null,_open:false});renderAggs()}
+function renderAggs(){const host=$("sel-rows");host.innerHTML="";
+  aggregates.forEach((a,i)=>{
+    const wrap=document.createElement("div");
+    const row=document.createElement("div");row.className="aggrow";
+    const nm=document.createElement("input");nm.value=a.name;nm.style.flex="0 0 150px";nm.placeholder="name";
+    nm.oninput=()=>{a.name=nm.value;renderHavingPreviewOnly()};
+    const fn=document.createElement("select");fn.style.flex="0 0 140px";
+    META.agg_funcs.forEach(x=>{const o=document.createElement("option");o.value=x.name;o.textContent=x.name;fn.appendChild(o)});
+    fn.value=a.func;
+    const fd=document.createElement("select");
+    FIELDS.forEach(fl=>{const o=document.createElement("option");o.value=fl.name;o.textContent=fl.name;fd.appendChild(o)});
+    if(a.field)fd.value=a.field;
+    const setFd=()=>{const needs=(META.agg_funcs.find(x=>x.name===fn.value)||{}).needs_field;
+      fd.style.visibility=needs?"visible":"hidden";a.field=needs?fd.value:""};
+    fn.onchange=()=>{a.func=fn.value;setFd()};fd.onchange=()=>{a.field=fd.value};setFd();
+    const flt=document.createElement("button");flt.className="btn subtle";
+    flt.textContent=a.filter?"FILTER ✓":"+ FILTER";
+    flt.onclick=()=>{a._open=!a._open;if(!a.filter)a.filter=newGroup("AND");renderAggs()};
+    const del=document.createElement("button");del.className="btn subtle danger";del.textContent="✕";
+    del.onclick=()=>{aggregates.splice(i,1);renderAggs();renderHavingPreviewOnly()};
+    row.append(nm,fn,fd,flt,del);wrap.appendChild(row);
+    if(a._open&&a.filter){const sub=document.createElement("div");sub.className="subsec";
+      const lbl=document.createElement("label");lbl.textContent=`FILTER for ${a.name}`;sub.appendChild(lbl);
+      const holder=document.createElement("div");sub.appendChild(holder);
+      renderGroup(a.filter,holder,renderAggs,1);wrap.appendChild(sub)}
+    host.appendChild(wrap)});
+}
+
+/* =============== HAVING builder =============== */
+let havingRows=[]; // {join,left,op,k,right,rightMode}
+function addHavingRow(){havingRows.push({join:"AND",left:aggregates[0]?.name||"",op:">",k:1,right:"0",rightMode:"const"});renderHaving()}
+function renderHaving(){
+  const adv=$("hv-adv").checked;
+  $("hv-text").classList.toggle("hidden",!adv);
+  const host=$("hv-rows");host.classList.toggle("hidden",adv);host.innerHTML="";
+  if(adv){renderHavingPreviewOnly();return}
+  havingRows.forEach((h,i)=>{
+    const row=document.createElement("div");row.className="hrow";
+    if(i>0){const j=document.createElement("select");j.style.flex="0 0 80px";
+      ["AND","OR"].forEach(x=>{const o=document.createElement("option");o.textContent=x;j.appendChild(o)});
+      j.value=h.join;j.onchange=()=>{h.join=j.value;renderHavingPreviewOnly()};row.appendChild(j)}
+    const left=document.createElement("select");left.style.flex="0 0 170px";
+    aggregates.forEach(a=>{const o=document.createElement("option");o.value=a.name;o.textContent=a.name;left.appendChild(o)});
+    left.value=h.left;left.onchange=()=>{h.left=left.value;renderHavingPreviewOnly()};
+    const op=document.createElement("select");op.style.flex="0 0 80px";
+    [">",">=","<","<=","==","!="].forEach(x=>{const o=document.createElement("option");o.textContent=x;op.appendChild(o)});
+    op.value=h.op;op.onchange=()=>{h.op=op.value;renderHavingPreviewOnly()};
+    const mode=document.createElement("select");mode.style.flex="0 0 130px";
+    [["const","number"],["agg","k × aggregate"]].forEach(([v,t])=>{const o=document.createElement("option");o.value=v;o.textContent=t;mode.appendChild(o)});
+    mode.value=h.rightMode;
+    const kIn=document.createElement("input");kIn.type="number";kIn.step="0.1";kIn.value=h.k;kIn.style.flex="0 0 80px";
+    kIn.oninput=()=>{h.k=kIn.value;renderHavingPreviewOnly()};
+    const rConst=document.createElement("input");rConst.value=h.rightMode==="const"?h.right:"";rConst.placeholder="value";
+    rConst.oninput=()=>{h.right=rConst.value;renderHavingPreviewOnly()};
+    const rAgg=document.createElement("select");
+    aggregates.forEach(a=>{const o=document.createElement("option");o.value=a.name;o.textContent=a.name;rAgg.appendChild(o)});
+    if(h.rightMode==="agg"&&h.right)rAgg.value=h.right;
+    rAgg.onchange=()=>{h.right=rAgg.value;renderHavingPreviewOnly()};
+    const syncMode=()=>{h.rightMode=mode.value;
+      kIn.style.display=mode.value==="agg"?"":"none";
+      rAgg.style.display=mode.value==="agg"?"":"none";
+      rConst.style.display=mode.value==="const"?"":"none";
+      if(mode.value==="agg"&&!aggregates.find(a=>a.name===h.right))h.right=aggregates[0]?.name||"";
+      renderHavingPreviewOnly()};
+    mode.onchange=syncMode;
+    const del=document.createElement("button");del.className="btn subtle danger";del.textContent="✕";
+    del.onclick=()=>{havingRows.splice(i,1);renderHaving()};
+    row.append(left,op,mode,kIn,rAgg,rConst,del);host.appendChild(row);
+    kIn.style.display=h.rightMode==="agg"?"":"none";
+    rAgg.style.display=h.rightMode==="agg"?"":"none";
+    rConst.style.display=h.rightMode==="const"?"":"none";
+  });
+  renderHavingPreviewOnly();
+}
+function havingExpr(){
+  if($("hv-adv").checked)return $("hv-text").value.trim();
+  return havingRows.map((h,i)=>{
+    const rhs=h.rightMode==="agg"?((+h.k===1?"":h.k+" * ")+h.right):h.right;
+    return (i>0?h.join+" ":"")+`${h.left} ${h.op} ${rhs}`}).join(" ");
+}
+function renderHavingPreviewOnly(){$("hv-preview").textContent=havingExpr()?("HAVING "+havingExpr()):""}
+
+/* =============== build / actions =============== */
+function buildDefinition(){
+  const d={name:$("r-name").value,description:$("r-desc").value,
+    scenario_ref:$("r-scenario").value,
+    from:$("r-from").value,
+    where:cleanTree(whereTree),
+    group_by:[...groupBy],
+    select:aggregates.map(a=>{const o={name:a.name,func:a.func};
+      if(a.field)o.field=a.field;const f=cleanTree(a.filter);if(f)o.filter=f;return o}),
+    having:havingExpr(),
+    time_window:{value:+$("r-tw-v").value,unit:$("r-tw-u").value},
+    frequency:{value:+$("r-fq-v").value,unit:$("r-fq-u").value},
+    risk_score:+$("r-risk").value,severity:$("r-sev").value,enabled:true};
+  if(editingId)d.rule_id=editingId;
+  return d;
+}
+async function doValidate(){try{const r=await api("/api/rules/validate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(buildDefinition())});
+  msg("b-msg",r.valid?"✔ Rule is valid":r.errors.join("\n"),r.valid)}catch(e){msg("b-msg",e.message,false)}}
+async function doPreview(){try{const r=await api("/api/rules/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(buildDefinition())});
+  if(!r.valid){msg("b-msg",r.errors.join("\n"),false);return}
+  $("b-msg").innerHTML="";$("prev-wrap").classList.remove("hidden");
+  $("prev-sql").textContent=r.sql;$("prev-es").textContent=JSON.stringify(r.es_query,null,2)}
+  catch(e){msg("b-msg",e.message,false)}}
+async function doTest(){try{const r=await api("/api/rules/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(buildDefinition())});
+  $("test-wrap").classList.remove("hidden");
+  $("test-sum").innerHTML=`<div class="msg ${r.groups_matched?"err":"ok"}">${r.rows_evaluated} rows · ${r.groups_evaluated} entities · <b>${r.groups_matched} would alert</b></div>`;
+  $("test-json").textContent=JSON.stringify(r.group_results,null,2);
+  msg("b-msg","✔ Dry run complete",true)}catch(e){msg("b-msg",e.message,false)}}
+async function doSave(){try{const d=buildDefinition();
+  const r=editingId?await api("/api/rules/"+editingId,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)})
+                   :await api("/api/rules",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
+  editingId=r.rule_id;$("edit-pill").textContent="Editing "+r.rule_id+" (v"+r.version+")";
+  $("edit-pill").classList.remove("hidden");$("btn-new").classList.remove("hidden");
+  msg("b-msg",`✔ Saved '${r.name}' v${r.version}`,true)}catch(e){msg("b-msg",e.message,false)}}
+function resetBuilder(){editingId=null;whereTree=newGroup("AND");groupBy=[];aggregates=[];havingRows=[];
+  $("r-name").value="";$("r-desc").value="";$("r-scenario").value="";
+  $("edit-pill").classList.add("hidden");$("btn-new").classList.add("hidden");
+  $("b-msg").innerHTML="";$("prev-wrap").classList.add("hidden");$("test-wrap").classList.add("hidden");
+  renderAllBuilder()}
+function renderAllBuilder(){renderGroup(whereTree,$("where-root"),renderAllBuilder,0);renderChips();renderAggs();renderHaving()}
+
+/* =============== rules tab =============== */
+async function loadRules(){const rs=await api("/api/rules");
+  $("rules-body").innerHTML=rs.map(r=>`<tr>
+    <td>${r.scenario_ref||"—"}</td>
+    <td><b>${r.name}</b><br><span class="pill">${r.rule_id}</span></td>
+    <td>v${r.version}</td>
+    <td style="max-width:420px"><code style="font-size:11.5px;white-space:pre-wrap">${sqlish(r)}</code></td>
+    <td><span class="tag ${r.severity}">${r.severity}</span></td>
+    <td><input type="checkbox" ${r.enabled?"checked":""} onchange='toggleRule("${r.rule_id}",this.checked)' style="width:auto"></td>
+    <td class="row">
+      <button class="btn subtle" onclick='editRule("${r.rule_id}")'>Edit</button>
+      <button class="btn subtle" onclick='execRule("${r.rule_id}")'>Run</button>
+      <button class="btn subtle danger" onclick='delRule("${r.rule_id}")'>Delete</button></td></tr>`).join("")
+    ||"<tr><td colspan=7>No rules</td></tr>"}
+function sqlish(r){const gb=(r.group_by||[]).join(", ");
+  const sel=(r.select||[]).map(a=>a.name).join(", ")||"*";
+  return `SELECT ${sel} FROM ${r.from}${gb?" GROUP BY "+gb:""}${r.having?" HAVING "+r.having:""}`}
+async function toggleRule(id,en){await api(`/api/rules/${id}/enable?enabled=${en}`,{method:"POST"})}
+async function execRule(id){try{const r=await api("/api/rules/"+id+"/execute",{method:"POST"});
+  msg("rules-msg",`'${r.rule_name}': ${r.rows_evaluated} rows → ${r.groups_matched} alert(s)`,true)}catch(e){msg("rules-msg",e.message,false)}}
+async function delRule(id){await api("/api/rules/"+id,{method:"DELETE"});loadRules()}
+async function runScheduler(){const r=await api("/api/scheduler/run",{method:"POST"});
+  msg("rules-msg",`Scheduler executed ${r.executed} due rule(s)`,true)}
+async function editRule(id){const r=await api("/api/rules/"+id);editingId=id;
+  document.querySelector('nav button[data-tab="builder"]').click();
+  $("r-name").value=r.name;$("r-desc").value=r.description||"";$("r-scenario").value=r.scenario_ref||"";
+  $("r-from").value=r.from;await loadFields();
+  $("r-tw-v").value=r.time_window.value;$("r-tw-u").value=r.time_window.unit;
+  $("r-fq-v").value=r.frequency.value;$("r-fq-u").value=r.frequency.unit;
+  $("r-risk").value=r.risk_score;$("r-sev").value=r.severity;
+  whereTree=r.where||newGroup("AND");groupBy=[...(r.group_by||[])];
+  aggregates=(r.select||[]).map(a=>({name:a.name,func:a.func,field:a.field||"",filter:a.filter||null,_open:false}));
+  havingRows=[];$("hv-adv").checked=true;$("hv-text").value=r.having||"";
+  $("edit-pill").textContent="Editing "+id+" (v"+r.version+")";
+  $("edit-pill").classList.remove("hidden");$("btn-new").classList.remove("hidden");
+  renderAllBuilder()}
+
+/* =============== alerts =============== */
+async function loadAlerts(){const as=await api("/api/alerts");
+  $("alerts-body").innerHTML=as.map(a=>{
+    const vals=Object.entries(a.rule_result.aggregates||{}).map(([k,v])=>`${k}=${v}`).join(", ")
+      ||(a.rule_result.record?`amount=${a.rule_result.record.amount??""}`:"");
+    const entity=Object.entries(a.group_key||{}).map(([k,v])=>`${k}=${v}`).join(", ");
+    return `<tr><td>${a.alert_id}<br><span class="pill">${a.scenario_ref||""}</span></td>
+    <td>${a.rule_name} (v${a.rule_version})</td>
+    <td>${entity||"—"}</td><td>${a.customer??"—"}</td>
+    <td style="max-width:260px">${vals}</td>
+    <td>${a.risk_score}</td><td><span class="tag ${a.severity}">${a.severity}</span></td>
+    <td>${(a.detection_time||"").replace("T"," ").slice(0,19)}</td>
+    <td><select onchange='setStatus("${a.alert_id}",this.value)'>
+      ${META.statuses.map(s=>`<option ${s===a.investigation_status?"selected":""}>${s}</option>`).join("")}</select></td></tr>`}).join("")
+    ||"<tr><td colspan=9>No alerts</td></tr>"}
+async function setStatus(id,s){await api("/api/alerts/"+id+"/status",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({investigation_status:s})})}
+
+/* =============== data tab =============== */
+async function loadEsHealth(){try{const h=await api("/api/es/health");
+  let html=`<b>URL:</b> ${h.es_url} · <b>Auth:</b> <span class="pill">${h.auth_mode}</span> · `;
+  html+=h.reachable?'<span class="tag Low">reachable</span>':'<span class="tag Critical">unreachable</span>';
+  if(h.reachable)html+=h.authenticated?' <span class="tag Low">authenticated</span>':' <span class="tag Critical">auth failed</span>';
+  if(h.indices&&Object.keys(h.indices).length){
+    html+='<table style="margin-top:8px"><thead><tr><th>Datasource</th><th>Index exists</th><th>Docs</th></tr></thead><tbody>';
+    for(const[k,v]of Object.entries(h.indices))html+=`<tr><td>${k}</td><td>${v.exists?"✔":"✕"}</td><td>${v.docs}</td></tr>`;
+    html+="</tbody></table>"}
+  $("es-health").innerHTML=html}catch(e){$("es-health").innerHTML=`<div class="msg err">${e.message}</div>`}}
+async function esSetup(seed){try{const r=await api("/api/es/setup?seed_demo="+seed,{method:"POST"});
+  let m="✔ indices ready";if(r.seeded)m+=` · seeded ${r.seeded.transactions.indexed} tx docs, ${r.seeded.wallets.indexed} wallets`;
+  msg("es-msg",m,true);loadEsHealth()}catch(e){msg("es-msg",e.message,false)}}
+
+let joinRows=[];
+function addJoinRow(){joinRows.push({source_field:"",target:META.join_targets[0],prefix:""});renderJoins()}
+function renderJoins(){const host=$("nds-joins");host.innerHTML="";
+  joinRows.forEach((j,i)=>{const row=document.createElement("div");row.className="aggrow";
+    const sf=document.createElement("input");sf.placeholder="source field (e.g. wallet_id)";sf.value=j.source_field;sf.oninput=()=>j.source_field=sf.value;
+    const tg=document.createElement("select");META.join_targets.forEach(t=>{const o=document.createElement("option");o.textContent=t;tg.appendChild(o)});
+    tg.value=j.target;tg.onchange=()=>j.target=tg.value;
+    const pf=document.createElement("input");pf.placeholder="prefix (e.g. wallet_)";pf.value=j.prefix;pf.oninput=()=>j.prefix=pf.value;
+    const del=document.createElement("button");del.className="btn subtle danger";del.textContent="✕";
+    del.onclick=()=>{joinRows.splice(i,1);renderJoins()};
+    row.append(sf,tg,pf,del);host.appendChild(row)})}
+async function loadDatasources(){const ds=await api("/api/datasources");
+  $("ds-body").innerHTML=ds.map(d=>`<tr><td><b>${d.name}</b>${d.builtin?' <span class="pill">built-in</span>':""}${d.doubleentry?' <span class="pill">double-entry</span>':""}</td>
+    <td>${d.es_index}</td><td>${d.timestamp_field??"—"}</td><td>${d.id_field??"—"}</td>
+    <td>${(d.required_fields||[]).join(", ")||"—"}</td>
+    <td>${(d.joins||[]).map(j=>`${j.source_field}→${j.target}(${j.prefix||""})`).join("<br>")||"—"}</td>
+    <td>${d.builtin?"":`<button class="btn subtle danger" onclick='delDs("${d.name}")'>Delete</button>`}</td></tr>`).join("");
+  const names=ds.map(d=>d.name);fill("csv-ds",names);fill("cf-ds",names)}
+async function saveDatasource(){try{
+  const body={name:$("nds-name").value.trim(),es_index:$("nds-index").value.trim(),
+    timestamp_field:$("nds-ts").value.trim(),id_field:$("nds-id").value.trim(),
+    required_fields:$("nds-req").value.split(",").map(s=>s.trim()).filter(Boolean),
+    joins:joinRows.filter(j=>j.source_field)};
+  await api("/api/datasources",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  msg("ds-msg","✔ created",true);joinRows=[];renderJoins();
+  ["nds-name","nds-index","nds-ts","nds-id","nds-req"].forEach(x=>$(x).value="");
+  META=await api("/api/metadata");fill("r-from",META.datasources);loadDatasources();loadEsHealth()}
+  catch(e){msg("ds-msg",e.message,false)}}
+async function delDs(name){try{await api("/api/datasources/"+name,{method:"DELETE"});
+  META=await api("/api/metadata");fill("r-from",META.datasources);loadDatasources()}catch(e){msg("ds-msg",e.message,false)}}
+
+async function loadComputed(){const cf=await api("/api/computed-fields");
+  $("cf-body").innerHTML=cf.map(c=>`<tr><td>${c.datasource}</td><td><b>${c.name}</b></td>
+    <td><code>${c.expression}</code></td>
+    <td><button class="btn subtle danger" onclick='delCf("${c.datasource}","${c.name}")'>Delete</button></td></tr>`).join("")
+    ||"<tr><td colspan=4>None</td></tr>"}
+async function saveComputed(){try{await api("/api/computed-fields",{method:"POST",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({datasource:$("cf-ds").value,name:$("cf-name").value,expression:$("cf-expr").value})});
+  msg("cf-msg","✔ saved",true);$("cf-name").value="";$("cf-expr").value="";loadComputed()}catch(e){msg("cf-msg",e.message,false)}}
+async function delCf(ds,name){await api(`/api/computed-fields/${ds}/${name}`,{method:"DELETE"});loadComputed()}
+
+async function loadLists(){const ls=await api("/api/lists");
+  $("ls-body").innerHTML=ls.map(l=>`<tr><td><b>@${l.name}</b></td>
+    <td style="max-width:420px">${l.values.join(", ")}</td><td>${l.description||""}</td>
+    <td><button class="btn subtle danger" onclick='delList("${l.name}")'>Delete</button></td></tr>`).join("")
+    ||"<tr><td colspan=4>None</td></tr>"}
+async function saveList(){try{await api("/api/lists",{method:"POST",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({name:$("ls-name").value,description:$("ls-desc").value,
+    values:$("ls-values").value.split(",").map(s=>s.trim()).filter(Boolean)})});
+  msg("ls-msg","✔ saved",true);META=await api("/api/metadata");loadLists()}catch(e){msg("ls-msg",e.message,false)}}
+async function delList(name){await api("/api/lists/"+name,{method:"DELETE"});META=await api("/api/metadata");loadLists()}
+
+function downloadTemplate(){window.location="/api/datasources/"+$("csv-ds").value+"/csv-template"}
+async function uploadCsv(){const f=$("csv-file").files[0];
+  if(!f){msg("csv-msg","choose a file first",false);return}
+  const fd=new FormData();fd.append("file",f);
+  try{const r=await api("/api/datasources/"+$("csv-ds").value+"/upload-csv",{method:"POST",body:fd});
+    let m=`✔ ${r.indexed} of ${r.documents} document(s) indexed (${r.received_rows} csv rows)`;
+    if(r.errors.length)m+="\n"+r.errors.join("\n");
+    msg("csv-msg",m,r.errors.length===0);$("csv-file").value="";loadEsHealth()}
+  catch(e){msg("csv-msg",e.message,false)}}
+
+/* =============== internal wallets =============== */
+async function loadIW(){const iw=await api("/api/internal-wallets");
+  $("iw-body").innerHTML=iw.map(w=>`<tr><td>${w.wallet_id}</td><td>${w.name}</td><td>${w.description}</td>
+    <td><button class="btn subtle danger" onclick='delIW("${w.wallet_id}")'>Delete</button></td></tr>`).join("")}
+async function saveIW(){try{await api("/api/internal-wallets",{method:"POST",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({wallet_id:$("iw-id").value,name:$("iw-name").value,description:$("iw-desc").value})});
+  msg("iw-msg","✔ saved",true);loadIW()}catch(e){msg("iw-msg",e.message,false)}}
+async function delIW(id){await api("/api/internal-wallets/"+id,{method:"DELETE"});loadIW()}
+
+/* =============== fields / init =============== */
+async function loadFields(){
+  try{const r=await api("/api/datasources/"+$("r-from").value+"/fields");FIELDS=r.fields}
+  catch(e){msg("b-msg","Cannot load fields: "+e.message,false);FIELDS=[]}
+  fill("gb-pick",FIELDS,"name",f=>`${f.name} (${f.type})`);
+  Object.keys(VC).forEach(k=>delete VC[k]);
+  renderAllBuilder()}
+(async function init(){
+  META=await api("/api/metadata");
+  fill("r-from",META.datasources);fill("r-sev",META.severities);
+  fill("r-tw-u",META.time_units);fill("r-fq-u",META.time_units);
+  $("r-tw-u").value="days";$("r-fq-u").value="hours";$("r-sev").value="High";
+  $("r-from").onchange=loadFields;
+  await loadFields();
+})();
+</script>
+</body>
+</html>
