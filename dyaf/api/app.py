@@ -431,8 +431,10 @@ def main():  # pragma: no cover
         os.environ["ELASTICSEARCH_URL"] = dev_es.url
         print(f"[dyaf] ELASTICSEARCH_URL not set -> started embedded dev ES at {dev_es.url}")
     try:
-        uvicorn.run(create_app(db_path="dyaf.db", es_url=os.environ.get("ELASTICSEARCH_URL")),
-                    host="127.0.0.1", port=int(os.environ.get("PORT", 8000)))
+        uvicorn.run(create_app(db_path=os.environ.get("DYAF_DB", "dyaf.db"),
+                               es_url=os.environ.get("ELASTICSEARCH_URL")),
+                    host=os.environ.get("HOST", "127.0.0.1"),
+                    port=int(os.environ.get("PORT", 8000)))
     finally:
         if dev_es:
             dev_es.stop()
