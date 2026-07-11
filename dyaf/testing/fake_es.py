@@ -153,12 +153,22 @@ class _State:
 
 
 class _Handler(BaseHTTPRequestHandler):
-    state: _State  # set by factory
+    state: _State          # set by factory
+    auth: Optional[str]    # expected "Basic <b64>" header value, or None
 
     def log_message(self, *args):  # silence
         pass
 
     # -------------------------------------------------- helpers
+    def _authorized(self) -> bool:
+        if self.auth is None:
+            return True
+        if self.headers.get("Authorization") == self.auth:
+            return True
+        self._send(401, {"error": {"type": "security_exception",
+                                   "reason": "missing or invalid credentials"}})
+        return False
+
     def _send(self, code: int, payload: dict | list) -> None:
         body = json.dumps(payload).encode()
         self.send_response(code)
@@ -179,6 +189,10 @@ class _Handler(BaseHTTPRequestHandler):
 
     # -------------------------------------------------- verbs
     def do_HEAD(self):
+        if self.auth is not None and self.headers.get("Authorization") != self.auth:
+            self.send_response(401)
+            self.end_headers()
+            return
         name = self.path.strip("/").split("/")[0]
         with self.state.lock:
             exists = name in self.state.indices
@@ -186,6 +200,8 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        if not self._authorized():
+            return
         parts = [p for p in self.path.split("?")[0].split("/") if p]
         with self.state.lock:
             if not parts:
@@ -202,6 +218,8 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(400, {"error": f"unsupported GET {self.path}"})
 
     def do_PUT(self):
+        if not self._authorized():
+            return
         parts = [p for p in self.path.split("?")[0].split("/") if p]
         body = json.loads(self._body() or b"{}")
         with self.state.lock:
@@ -215,6 +233,8 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(400, {"error": f"unsupported PUT {self.path}"})
 
     def do_DELETE(self):
+        if not self._authorized():
+            return
         parts = [p for p in self.path.split("?")[0].split("/") if p]
         with self.state.lock:
             if len(parts) == 1 and parts[0] in self.state.indices:
@@ -223,6 +243,8 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        if not self._authorized():
+            return
         parts = [p for p in self.path.split("?")[0].split("/") if p]
         raw = self._body()
         with self.state.lock:
@@ -273,8 +295,14 @@ class _Handler(BaseHTTPRequestHandler):
 class FakeElasticsearch:
     """Threaded fake ES server; use as a context manager or start()/stop()."""
 
-    def __init__(self, port: int = 0):
-        handler = type("Handler", (_Handler,), {"state": _State()})
+    def __init__(self, port: int = 0, username: Optional[str] = None,
+                 password: Optional[str] = None):
+        expected = None
+        if username is not None:
+            import base64
+            token = base64.b64encode(f"{username}:{password or ''}".encode()).decode()
+            expected = f"Basic {token}"
+        handler = type("Handler", (_Handler,), {"state": _State(), "auth": expected})
         self._server = ThreadingHTTPServer(("127.0.0.1", port), handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 

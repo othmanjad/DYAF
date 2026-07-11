@@ -387,6 +387,7 @@ async function setStatus(id,s){await api("/api/alerts/"+id+"/status",{method:"PU
 /* ---------------- data tab (ES + CSV) ---------------- */
 async function loadEsHealth(){try{const h=await api("/api/es/health");
   let html=`<b>URL:</b> ${h.es_url} &nbsp; <b>Status:</b> ${h.reachable?'<span class="tag Low">reachable</span>':'<span class="tag Critical">unreachable</span>'}`;
+  html+=` &nbsp; <b>Auth:</b> <span class="pill">${h.auth_mode}</span> ${h.reachable?(h.authenticated?'<span class="tag Low">authenticated</span>':'<span class="tag Critical">authentication failed — check ELASTICSEARCH_USERNAME / ELASTICSEARCH_PASSWORD</span>'):''}`;
   if(h.reachable){html+='<table style="margin-top:8px"><thead><tr><th>Index</th><th>Exists</th><th>Documents</th></tr></thead><tbody>';
     for(const[k,v]of Object.entries(h.indices))html+=`<tr><td>${k}</td><td>${v.exists?"✔":"✕ (not created yet)"}</td><td>${v.docs}</td></tr>`;
     html+="</tbody></table>"}

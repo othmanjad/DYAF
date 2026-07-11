@@ -34,6 +34,37 @@ python -m dyaf.api.app                            # ثم افتح http://127.0.0
 > (index creation, mapping, bulk, search) حتى تعمل المنصة فوراً بدون بنية تحتية.
 > للإنتاج اضبط المتغير على cluster حقيقي — الكود لا يتغير إطلاقاً.
 
+## إعدادات الاتصال والمصادقة / Connection & Authentication
+
+كل الإعدادات عبر متغيرات البيئة، أو ملف **`.env`** في مجلد التشغيل
+(انسخ `.env.example` إلى `.env` وعدّل القيم — متغيرات البيئة الفعلية لها الأولوية):
+
+| المتغير | الوصف |
+|---|---|
+| `ELASTICSEARCH_URL` | عنوان الـ cluster (مثال: `https://es.mycompany.com:9200`) |
+| `ELASTICSEARCH_USERNAME` | اسم المستخدم (Basic Auth) |
+| `ELASTICSEARCH_PASSWORD` | كلمة المرور |
+| `ELASTICSEARCH_API_KEY` | بديل عن اسم المستخدم/كلمة المرور: API Key صادر من ES (له الأولوية عند ضبط الاثنين) |
+| `ELASTICSEARCH_CA_CERT` | مسار شهادة CA للـ cluster (مثل `http_ca.crt` الذي يولّده ES 8) |
+| `ELASTICSEARCH_VERIFY_CERTS` | `false` لتعطيل التحقق من الشهادات (للتطوير فقط) |
+| `PORT` | منفذ خادم الويب (افتراضي 8000) |
+
+مثال إعداد نموذجي لـ Elasticsearch 8 محلي:
+
+```bash
+cp .env.example .env
+# ثم عدّل .env:
+#   ELASTICSEARCH_URL=https://localhost:9200
+#   ELASTICSEARCH_USERNAME=elastic
+#   ELASTICSEARCH_PASSWORD=<كلمة المرور التي ولّدها ES عند التثبيت>
+#   ELASTICSEARCH_CA_CERT=/etc/elasticsearch/certs/http_ca.crt
+python -m dyaf.api.app
+```
+
+تبويب **Data** في الواجهة و `GET /api/es/health` يعرضان حالة المصادقة
+(`auth_mode`: none / basic / api_key، و`authenticated`: نجاح/فشل الاعتماد) —
+عند فشل الاعتماد تظهر رسالة واضحة بدل أخطاء غامضة. ملف `.env` مستثنى من git.
+
 ---
 
 ## Elasticsearch

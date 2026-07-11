@@ -39,7 +39,34 @@ from ..scheduler import RuleScheduler
 from ..seed import seed
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
-DEFAULT_ES_URL = os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200")
+
+
+def load_dotenv(path: str = ".env") -> None:
+    """Load KEY=VALUE lines from a .env file into os.environ (no override)."""
+    if not os.path.isfile(path):
+        return
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key, value = key.strip(), value.strip().strip("'\"")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+def es_config_from_env() -> dict:
+    """Elasticsearch connection settings (see .env.example / README)."""
+    return {
+        "es_url": os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200"),
+        "username": os.environ.get("ELASTICSEARCH_USERNAME"),
+        "password": os.environ.get("ELASTICSEARCH_PASSWORD"),
+        "api_key": os.environ.get("ELASTICSEARCH_API_KEY"),
+        "ca_cert": os.environ.get("ELASTICSEARCH_CA_CERT"),
+        "verify_certs": os.environ.get("ELASTICSEARCH_VERIFY_CERTS", "true").lower()
+                        not in ("0", "false", "no"),
+    }
 
 
 class InternalWalletBody(BaseModel):
@@ -52,14 +79,14 @@ class StatusBody(BaseModel):
     investigation_status: str
 
 
-def build_registry(es_url: str) -> DataSourceRegistry:
+def build_registry(es_url: str, **auth) -> DataSourceRegistry:
     registry = DataSourceRegistry()
     registry.register(ElasticsearchDataSource(
         es_url, index="transactions", timestamp_field="executed_at",
-        mappings=ingest.transactions_mappings()))
+        mappings=ingest.transactions_mappings(), **auth))
     registry.register(ElasticsearchDataSource(
         es_url, index="wallets", timestamp_field=None,
-        mappings=ingest.wallets_mappings()))
+        mappings=ingest.wallets_mappings(), **auth))
     return registry
 
 
@@ -74,10 +101,13 @@ def index_platform_data(db: Database, registry: DataSourceRegistry) -> dict:
 
 
 def create_app(db_path: str = ":memory:", es_url: Optional[str] = None,
-               seed_data: bool = True) -> FastAPI:
-    es_url = es_url or DEFAULT_ES_URL
+               seed_data: bool = True, es_auth: Optional[dict] = None) -> FastAPI:
+    env_cfg = es_config_from_env()
+    es_url = es_url or env_cfg["es_url"]
+    auth = es_auth if es_auth is not None else {
+        k: v for k, v in env_cfg.items() if k != "es_url"}
     db = Database(db_path)
-    registry = build_registry(es_url)
+    registry = build_registry(es_url, **auth)
 
     rules_repo = RuleRepository(db)
     alerts_repo = AlertRepository(db)
@@ -126,9 +156,13 @@ def create_app(db_path: str = ":memory:", es_url: Optional[str] = None,
     @app.get("/api/es/health")
     def es_health():
         tx = registry.get("transactions")
-        reachable = tx.ping()
-        info = {"es_url": es_url, "reachable": reachable, "indices": {}}
-        if reachable:
+        conn = tx.check_connection()
+        info = {"es_url": es_url, "auth_mode": tx.auth_mode,
+                "reachable": conn["reachable"],
+                "authenticated": conn["authenticated"], "indices": {}}
+        if conn.get("error"):
+            info["error"] = conn["error"]
+        if conn["ok"]:
             for name in registry.names():
                 source = registry.get(name)
                 exists = source.index_exists()
@@ -385,6 +419,7 @@ def create_app(db_path: str = ":memory:", es_url: Optional[str] = None,
 
 def main():  # pragma: no cover
     import uvicorn
+    load_dotenv()  # pick up ELASTICSEARCH_* settings from ./.env if present
     dev_es = None
     if os.environ.get("DYAF_DEV_ES", "").lower() in ("1", "true", "yes") \
             or not os.environ.get("ELASTICSEARCH_URL"):

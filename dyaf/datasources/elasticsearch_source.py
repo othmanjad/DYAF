@@ -31,6 +31,11 @@ class ElasticsearchDataSource(DataSource):
     def __init__(self, base_url: str, index: str, name: Optional[str] = None,
                  timestamp_field: Optional[str] = "executed_at",
                  mappings: Optional[dict] = None,
+                 username: Optional[str] = None,
+                 password: Optional[str] = None,
+                 api_key: Optional[str] = None,
+                 ca_cert: Optional[str] = None,
+                 verify_certs: bool = True,
                  session: Optional[requests.Session] = None):
         self.base_url = base_url.rstrip("/")
         self.index = index
@@ -41,14 +46,39 @@ class ElasticsearchDataSource(DataSource):
         # local cluster access must never go through the outbound proxy
         self.http.trust_env = False if "localhost" in base_url or "127.0.0.1" in base_url else self.http.trust_env
 
+        # --- authentication -------------------------------------------
+        self.auth_mode = "none"
+        if api_key:
+            # Elasticsearch API key (base64 "id:api_key" as issued by ES)
+            self.http.headers["Authorization"] = f"ApiKey {api_key}"
+            self.auth_mode = "api_key"
+        elif username is not None:
+            self.http.auth = (username, password or "")
+            self.auth_mode = "basic"
+        # --- TLS -------------------------------------------------------
+        if ca_cert:
+            self.http.verify = ca_cert
+        elif not verify_certs:
+            self.http.verify = False
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
     # ------------------------------------------------------------------
     # Cluster / index administration
     # ------------------------------------------------------------------
-    def ping(self) -> bool:
+    def check_connection(self) -> dict:
+        """Reachability + authentication status against the cluster root."""
         try:
-            return self.http.get(self.base_url, timeout=5).ok
-        except requests.RequestException:
-            return False
+            resp = self.http.get(self.base_url, timeout=5)
+            return {"reachable": True,
+                    "authenticated": resp.status_code not in (401, 403),
+                    "status_code": resp.status_code, "ok": resp.ok}
+        except requests.RequestException as e:
+            return {"reachable": False, "authenticated": False, "ok": False,
+                    "error": str(e)}
+
+    def ping(self) -> bool:
+        return self.check_connection()["ok"]
 
     def index_exists(self) -> bool:
         resp = self.http.head(f"{self.base_url}/{self.index}", timeout=10)
