@@ -89,9 +89,27 @@ class Store:
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.RLock()
+        self._archive_v1_schema()
         with self._lock:
             self._conn.executescript(SCHEMA)
             self._conn.commit()
+
+    def _archive_v1_schema(self) -> None:
+        """Opening a v1 database: archive the old tables so the v2 schema
+        can be created cleanly (v1 kept as *_v1_backup for reference)."""
+        tables = {r["name"] for r in self.query(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        if "wallets" not in tables:
+            return
+        cols = {c["name"] for c in self.query("PRAGMA table_info(wallets)")}
+        if "data" in cols:
+            return  # already v2
+        for t in ("wallets", "transactions", "transaction_types",
+                  "internal_wallets", "rules", "rule_versions", "alerts",
+                  "datasource_configs"):
+            if t in tables:
+                self.execute(f"DROP TABLE IF EXISTS {t}_v1_backup")
+                self.execute(f"ALTER TABLE {t} RENAME TO {t}_v1_backup")
 
     def execute(self, sql: str, params: Iterable = ()) -> sqlite3.Cursor:
         with self._lock:
