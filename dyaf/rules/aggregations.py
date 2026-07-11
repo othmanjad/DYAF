@@ -144,6 +144,35 @@ def _agg_difference(rows, field, config):
     return num - den
 
 
+def _agg_compare(rows, field, config):
+    """Generic comparison of two freely-defined sub-aggregations.
+
+    config = {
+        "left":  {"type": "count|sum|avg|min|max|distinct_count",
+                   "field": ..., "condition": {...}},
+        "right": {...},
+        "operation": "subtract" | "divide",
+    }
+    Example: sum(amount where direction=debit) - sum(amount where
+    direction=credit), or avg(amount today) / avg(amount overall).
+    """
+    def side_value(side: dict) -> float:
+        side = side or {}
+        side_rows = _subset(rows, side.get("condition"))
+        side_type = side.get("type", "count")
+        if side_type == "compare":
+            raise ValueError("compare sides cannot be nested compares")
+        return compute(side_type, side_rows, field=side.get("field"),
+                       config=side.get("config"))
+
+    left = side_value(config.get("left"))
+    right = side_value(config.get("right"))
+    operation = config.get("operation", "subtract")
+    if operation == "divide":
+        return left / right if right != 0 else 0.0
+    return left - right
+
+
 def _agg_stddev(rows, field, config):
     vals = _numeric_values(rows, field)
     return float(statistics.pstdev(vals)) if len(vals) >= 2 else 0.0
@@ -170,6 +199,8 @@ register("ratio", _agg_ratio, needs_field=False,
          description="Ratio between numerator and denominator condition subsets")
 register("difference", _agg_difference, needs_field=False,
          description="Difference (numerator - denominator) between two condition subsets")
+register("compare", _agg_compare, needs_field=False,
+         description="Compare two freely-defined sub-aggregations (subtract or divide)")
 register("stddev", _agg_stddev, needs_field=True, experimental=True,
          description="Standard deviation of a numeric field (future support)")
 register("moving_average", _agg_moving_average, needs_field=True, experimental=True,

@@ -100,6 +100,21 @@ th{color:var(--muted);font-size:11px;text-transform:uppercase}
       <div class="row" style="margin-top:6px"><span class="pill">Optional measure field (blank = count)</span>
         <select id="r-agg-measure" style="width:220px"></select></div>
     </div>
+    <div id="agg-compare" class="hidden">
+      <div class="row" style="margin:8px 0"><label style="margin:0">Operation</label>
+        <select id="cmp-op" style="width:220px">
+          <option value="subtract">left − right (subtract)</option>
+          <option value="divide">left ÷ right (divide)</option>
+        </select></div>
+      <div class="subsec"><label>Left Side</label>
+        <div class="row"><select id="cmp-l-type" style="width:150px"></select>
+          <select id="cmp-l-field" style="width:220px"></select></div>
+        <label style="margin-top:6px">Left Filter (optional)</label><div id="cmp-l-cond"></div></div>
+      <div class="subsec"><label>Right Side</label>
+        <div class="row"><select id="cmp-r-type" style="width:150px"></select>
+          <select id="cmp-r-field" style="width:220px"></select></div>
+        <label style="margin-top:6px">Right Filter (optional)</label><div id="cmp-r-cond"></div></div>
+    </div>
   </div>
 
   <div class="panel">
@@ -139,6 +154,27 @@ th{color:var(--muted);font-size:11px;text-transform:uppercase}
 <!-- ======================= DATA TAB ======================= -->
 <section id="tab-data" class="hidden">
   <div class="panel">
+    <h2>Datasources <span class="pill">register any Elasticsearch index as a rule source — no code needed</span></h2>
+    <table><thead><tr><th>Name</th><th>Index</th><th>Timestamp Field</th><th>ID Field</th><th>Required Columns</th><th>Enrichments</th><th>Type</th><th></th></tr></thead>
+    <tbody id="ds-body"></tbody></table>
+    <h2 style="margin-top:16px">Add Datasource</h2>
+    <div class="grid">
+      <div><label>Name</label><input id="nds-name" placeholder="card_events"></div>
+      <div><label>ES Index (blank = same as name)</label><input id="nds-index"></div>
+      <div><label>Timestamp Field (optional)</label><input id="nds-ts" placeholder="event_time"></div>
+      <div><label>ID Field (optional)</label><input id="nds-id" placeholder="event_id"></div>
+      <div><label>Required CSV Columns (comma)</label><input id="nds-req" placeholder="event_id,event_time,amount"></div>
+    </div>
+    <label style="margin-top:8px">Enrichments (optional)</label>
+    <div id="nds-enrich"></div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn subtle" onclick="addEnrichRow()">+ Enrichment</button>
+      <button class="btn primary" onclick="saveDatasource()">Create Datasource</button>
+    </div>
+    <div id="ds-msg"></div>
+  </div>
+
+  <div class="panel">
     <h2>Elasticsearch Cluster</h2>
     <div id="es-health" style="font-size:13px">Loading…</div>
     <div class="row" style="margin-top:10px">
@@ -158,10 +194,7 @@ th{color:var(--muted);font-size:11px;text-transform:uppercase}
     <div class="grid">
       <div>
         <label>Datasource</label>
-        <select id="csv-ds">
-          <option value="transactions">transactions</option>
-          <option value="wallets">wallets</option>
-        </select>
+        <select id="csv-ds"></select>
       </div>
       <div>
         <label>Template</label>
@@ -210,12 +243,19 @@ document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("nav button").forEach(x=>x.classList.remove("active"));b.classList.add("active");
   ["builder","rules","alerts","data","settings"].forEach(t=>$("tab-"+t).classList.toggle("hidden",t!==b.dataset.tab));
   if(b.dataset.tab==="rules")loadRules(); if(b.dataset.tab==="alerts")loadAlerts(); if(b.dataset.tab==="settings")loadInternalWallets();
-  if(b.dataset.tab==="data")loadEsHealth();
+  if(b.dataset.tab==="data"){loadEsHealth();loadDatasources()}
 });
 
 /* ---------------- condition builder (recursive, drag & drop) ---------------- */
 function newGroup(logic){return{logic:logic||"AND",conditions:[]}}
 let condTree=newGroup("AND"), numTree=null, denTree=null;
+let cmpLeftTree=null, cmpRightTree=null;
+const VALUES_CACHE={};
+async function fieldValues(field){const ds=$("r-ds").value;const key=ds+"|"+field;
+  if(!(key in VALUES_CACHE)){try{const r=await api(`/api/datasources/${ds}/fields/${encodeURIComponent(field)}/values`);
+    VALUES_CACHE[key]=r.values||[]}catch(e){VALUES_CACHE[key]=[]}}
+  return VALUES_CACHE[key]}
+let dlSeq=0;
 
 function renderGroup(node,container,onChange,depth){
   container.innerHTML="";
@@ -258,7 +298,16 @@ function renderCondition(c,parent,idx,onChange){
   op.value=c.operator;row.appendChild(op);
   const v=document.createElement("input");v.placeholder="value (comma list for in/between)";
   v.value=Array.isArray(c.value)?c.value.join(","):(c.value??"");
-  const isDateField=()=>((FIELDS.find(x=>x.name===f.value)||{}).type==="date");
+  // suggest existing index values for keyword/boolean fields (datalist)
+  const dl=document.createElement("datalist");dl.id="dl-"+(++dlSeq);row.appendChild(dl);
+  const ftype=()=>((FIELDS.find(x=>x.name===f.value)||{}).type);
+  const isDateField=()=>ftype()==="date";
+  const loadSuggestions=async()=>{
+    if(["keyword","boolean","text"].includes(ftype())){
+      const vals=await fieldValues(f.value);
+      dl.innerHTML=vals.map(x=>`<option value="${String(x).replace(/"/g,"&quot;")}">`).join("");
+      v.setAttribute("list",dl.id);
+    } else {v.removeAttribute("list");dl.innerHTML=""}};
   const syncV=()=>{const needs=(META.operators.find(x=>x.name===op.value)||{}).requires_value!==false;
     v.style.display=needs?"":"none";
     // date fields get a native datetime picker for comparison operators
@@ -269,8 +318,8 @@ function renderCondition(c,parent,idx,onChange){
     if(["in","not_in","between"].includes(op.value)){c.value=raw.split(",").map(s=>s.trim()).filter(s=>s!=="").map(s=>isNaN(+s)?s:+s)}
     else if(wantsDt||isDateField()){c.value=raw}   // keep ISO datetime strings as-is
     else c.value=raw!==""&&!isNaN(+raw)?+raw:raw};
-  f.onchange=()=>{c.field=f.value;syncV()};
-  op.onchange=()=>{c.operator=op.value;syncV()};v.oninput=syncV;v.onchange=syncV;syncV();
+  f.onchange=()=>{c.field=f.value;syncV();loadSuggestions()};
+  op.onchange=()=>{c.operator=op.value;syncV()};v.oninput=syncV;v.onchange=syncV;syncV();loadSuggestions();
   row.appendChild(v);
   const del=document.createElement("button");del.className="btn subtle danger";del.textContent="✕";
   del.onclick=()=>{parent.conditions.splice(idx,1);onChange()};row.appendChild(del);
@@ -280,10 +329,12 @@ function renderCondition(c,parent,idx,onChange){
 function renderAll(){
   renderGroup(condTree,$("cond-root"),renderAll,0);
   const agg=$("r-agg").value, matchMode=(agg===""), needsSub=(agg==="percentage"||agg==="ratio"||agg==="difference");
+  const isCompare=(agg==="compare");
   $("agg-sub").classList.toggle("hidden",!needsSub);
+  $("agg-compare").classList.toggle("hidden",!isCompare);
   $("agg-den-wrap").classList.toggle("hidden",agg!=="ratio"&&agg!=="difference");
   const needsField=(META.aggregations.find(a=>a.name===agg)||{}).needs_field;
-  $("agg-field-wrap").style.visibility=(needsField&&!matchMode)?"visible":"hidden";
+  $("agg-field-wrap").style.visibility=(needsField&&!matchMode&&!isCompare)?"visible":"hidden";
   // match mode: no threshold needed — one alert per matching record
   $("th-op-wrap").style.visibility=matchMode?"hidden":"visible";
   $("th-v-wrap").style.visibility=matchMode?"hidden":"visible";
@@ -292,6 +343,20 @@ function renderAll(){
     renderGroup(numTree,$("agg-num"),renderAll,1);
     if(agg==="ratio"||agg==="difference"){if(!denTree)denTree=newGroup("AND");renderGroup(denTree,$("agg-den"),renderAll,1)}
   }
+  if(isCompare){
+    if(!cmpLeftTree)cmpLeftTree=newGroup("AND");
+    if(!cmpRightTree)cmpRightTree=newGroup("AND");
+    renderGroup(cmpLeftTree,$("cmp-l-cond"),renderAll,1);
+    renderGroup(cmpRightTree,$("cmp-r-cond"),renderAll,1);
+    syncCompareSide("l");syncCompareSide("r");
+  }
+}
+
+const SIDE_AGGS=["count","sum","avg","min","max","distinct_count"];
+function syncCompareSide(side){
+  const t=$(`cmp-${side}-type`).value||"count";
+  const needsF=(META.aggregations.find(a=>a.name===t)||{}).needs_field;
+  $(`cmp-${side}-field`).style.visibility=needsF?"visible":"hidden";
 }
 
 /* ---------------- rule assembly ---------------- */
@@ -310,6 +375,14 @@ function buildDefinition(){
       a.config={};const nt=cleanTree(numTree);if(nt)a.config.numerator_condition=nt;
       if(agg==="ratio"||agg==="difference"){const dt=cleanTree(denTree);if(dt)a.config.denominator_condition=dt}
       const m=$("r-agg-measure").value;if(m)a.field=m;
+    }
+    if(agg==="compare"){
+      const side=s=>{const t=$(`cmp-${s}-type`).value||"count";
+        const o={type:t};
+        if((META.aggregations.find(x=>x.name===t)||{}).needs_field)o.field=$(`cmp-${s}-field`).value;
+        const ct=cleanTree(s==="l"?cmpLeftTree:cmpRightTree);if(ct)o.condition=ct;
+        return o};
+      a.config={left:side("l"),right:side("r"),operation:$("cmp-op").value};
     }
   }
   const d={name:$("r-name").value,description:$("r-desc").value,
@@ -347,7 +420,7 @@ async function doSave(){try{const d=buildDefinition();
   $("editing-pill").textContent="Editing: "+r.rule_id;$("editing-pill").classList.remove("hidden");$("cancel-edit").classList.remove("hidden")}
   catch(e){msg("builder-msg",e.message,false)}}
 
-function resetBuilder(){editingRuleId=null;condTree=newGroup("AND");numTree=null;denTree=null;
+function resetBuilder(){editingRuleId=null;condTree=newGroup("AND");numTree=null;denTree=null;cmpLeftTree=null;cmpRightTree=null;
   $("r-name").value="";$("r-desc").value="";$("editing-pill").classList.add("hidden");$("cancel-edit").classList.add("hidden");
   $("builder-msg").innerHTML="";$("preview-wrap").classList.add("hidden");$("test-wrap").classList.add("hidden");renderAll()}
 
@@ -385,6 +458,14 @@ async function editRule(id){const r=await api("/api/rules/"+id);editingRuleId=id
   condTree=r.conditions||newGroup("AND");
   numTree=(agg.config||{}).numerator_condition||null;
   denTree=(agg.config||{}).denominator_condition||null;
+  cmpLeftTree=((agg.config||{}).left||{}).condition||null;
+  cmpRightTree=((agg.config||{}).right||{}).condition||null;
+  if(agg.type==="compare"){const cfg=agg.config||{};
+    $("cmp-op").value=cfg.operation||"subtract";
+    $("cmp-l-type").value=(cfg.left||{}).type||"count";
+    $("cmp-r-type").value=(cfg.right||{}).type||"count";
+    if((cfg.left||{}).field)$("cmp-l-field").value=cfg.left.field;
+    if((cfg.right||{}).field)$("cmp-r-field").value=cfg.right.field;}
   $("editing-pill").textContent="Editing: "+id+" (v"+r.version+")";$("editing-pill").classList.remove("hidden");
   $("cancel-edit").classList.remove("hidden");renderAll()}
 
@@ -399,6 +480,44 @@ async function loadAlerts(){const alerts=await api("/api/alerts");
     <td>${(a.detection_time||"").replace("T"," ").slice(0,19)}</td>
     <td><select onchange='setStatus("${a.alert_id}",this.value)'>${STATUSES.map(s=>`<option ${s===a.investigation_status?"selected":""}>${s}</option>`).join("")}</select></td></tr>`).join("")||"<tr><td colspan=9>No alerts</td></tr>"}
 async function setStatus(id,s){await api("/api/alerts/"+id+"/status",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({investigation_status:s})})}
+
+/* ---------------- datasource management ---------------- */
+let enrichRows=[];
+function addEnrichRow(){enrichRows.push({key_field:"",lookup:META.enrichment_lookups[0]||"wallets",prefix:""});renderEnrichRows()}
+function renderEnrichRows(){const host=$("nds-enrich");host.innerHTML="";
+  enrichRows.forEach((e,i)=>{const row=document.createElement("div");row.className="cond";row.draggable=false;
+    const kf=document.createElement("input");kf.placeholder="key field (e.g. wallet_id)";kf.value=e.key_field;kf.oninput=()=>e.key_field=kf.value;
+    const lk=document.createElement("select");(META.enrichment_lookups||[]).forEach(l=>{const o=document.createElement("option");o.value=l;o.textContent="lookup: "+l;lk.appendChild(o)});
+    lk.value=e.lookup;lk.onchange=()=>e.lookup=lk.value;
+    const pf=document.createElement("input");pf.placeholder="prefix (e.g. sender_)";pf.value=e.prefix;pf.oninput=()=>e.prefix=pf.value;
+    const del=document.createElement("button");del.className="btn subtle danger";del.textContent="✕";del.onclick=()=>{enrichRows.splice(i,1);renderEnrichRows()};
+    row.append(kf,lk,pf,del);host.appendChild(row)})}
+
+async function loadDatasources(){const cfgs=await api("/api/datasource-configs");
+  $("ds-body").innerHTML=cfgs.map(c=>`<tr>
+    <td><b>${c.name}</b></td><td>${c.es_index}</td><td>${c.timestamp_field??"—"}</td><td>${c.id_field??"—"}</td>
+    <td>${(c.required_fields||[]).join(", ")||"—"}</td>
+    <td>${(c.enrichments||[]).map(e=>`${e.key_field}→${e.lookup}(${e.prefix||""})`).join("<br>")||"—"}</td>
+    <td>${c.builtin?'<span class="pill">built-in</span>':'<span class="pill">custom</span>'}</td>
+    <td>${c.builtin?"":`<button class='btn subtle danger' onclick='delDatasource("+JSON.stringify(c.name)+")'>Delete</button>`}</td></tr>`).join("");
+  fill("csv-ds",cfgs.filter(c=>c.name!=="wallet_transactions").map(c=>c.name));
+}
+
+async function saveDatasource(){try{
+  const body={name:$("nds-name").value.trim(),es_index:$("nds-index").value.trim()||$("nds-name").value.trim(),
+    timestamp_field:$("nds-ts").value.trim(),id_field:$("nds-id").value.trim(),
+    required_fields:$("nds-req").value.split(",").map(s=>s.trim()).filter(Boolean),
+    enrichments:enrichRows.filter(e=>e.key_field)};
+  const r=await api("/api/datasource-configs",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  msg("ds-msg",`✔ Datasource '${r.name}' created (index ${r.index_setup&&r.index_setup.created?"created":"already existed"})`,true);
+  enrichRows=[];renderEnrichRows();
+  ["nds-name","nds-index","nds-ts","nds-id","nds-req"].forEach(id=>$(id).value="");
+  META=await api("/api/metadata");fill("r-ds",META.datasources);
+  loadDatasources();loadEsHealth()}catch(e){msg("ds-msg",e.message,false)}}
+
+async function delDatasource(name){try{await api("/api/datasource-configs/"+name,{method:"DELETE"});
+  META=await api("/api/metadata");fill("r-ds",META.datasources);loadDatasources();loadEsHealth()}
+  catch(e){msg("ds-msg",e.message,false)}}
 
 /* ---------------- data tab (ES + CSV) ---------------- */
 async function loadEsHealth(){try{const h=await api("/api/es/health");
@@ -450,6 +569,8 @@ async function loadFields(){
   fill("r-agg-field",FIELDS.filter(f=>["double","long"].includes(f.type)),"name",f=>`${f.name} (${f.type})`);
   const m=$("r-agg-measure");m.innerHTML='<option value="">— count —</option>';
   FIELDS.filter(f=>["double","long"].includes(f.type)).forEach(f=>{const o=document.createElement("option");o.value=f.name;o.textContent=f.name;m.appendChild(o)});
+  ["cmp-l-field","cmp-r-field"].forEach(id=>fill(id,FIELDS,"name",f=>`${f.name} (${f.type})`));
+  Object.keys(VALUES_CACHE).forEach(k=>delete VALUES_CACHE[k]);
   renderAll()}
 
 (async function init(){
@@ -460,6 +581,8 @@ async function loadFields(){
   const ag=$("r-agg"),noAgg=document.createElement("option");
   noAgg.value="";noAgg.textContent="— none (alert on every matching record) —";
   ag.insertBefore(noAgg,ag.firstChild);ag.value="count";
+  ["cmp-l-type","cmp-r-type"].forEach(id=>{fill(id,SIDE_AGGS);
+    $(id).onchange=()=>syncCompareSide(id.includes("-l-")?"l":"r")});
   $("r-tw-u").value="hours";$("r-freq-u").value="hours";$("r-sev").value="High";
   $("r-ds").onchange=loadFields;$("r-agg").onchange=renderAll;
   await loadFields();

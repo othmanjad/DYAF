@@ -162,6 +162,16 @@ class ElasticsearchDataSource(DataSource):
             else:
                 out.append(FieldInfo(name=full, type=spec.get("type", "keyword")))
 
+    def field_values(self, field: str, size: int = 50) -> list:
+        """Distinct values of a field (terms aggregation) for UI dropdowns."""
+        body = {"size": 0, "query": {"match_all": {}},
+                "aggs": {"values": {"terms": {"field": field, "size": size}}}}
+        resp = self.http.post(f"{self.base_url}/{self.index}/_search", json=body, timeout=15)
+        if not resp.ok:
+            raise ElasticsearchError(f"Field values failed on '{self.index}': {resp.text}")
+        buckets = resp.json().get("aggregations", {}).get("values", {}).get("buckets", [])
+        return [b.get("key_as_string", b.get("key")) for b in buckets]
+
     # ------------------------------------------------------------------
     # Rule fetch (query pushdown)
     # ------------------------------------------------------------------

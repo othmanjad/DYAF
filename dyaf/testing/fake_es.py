@@ -264,9 +264,30 @@ class _Handler(BaseHTTPRequestHandler):
                             for _id, doc in index["docs"].items() if _matches(query, doc)]
                 except ValueError as e:
                     return self._send(400, {"error": str(e)})
-                return self._send(200, {"hits": {"total": {"value": len(hits)},
-                                                 "hits": hits[:size]}})
+                response = {"hits": {"total": {"value": len(hits)}, "hits": hits[:size]}}
+                aggs = body.get("aggs") or {}
+                if aggs:
+                    response["aggregations"] = self._run_aggs(aggs, [h["_source"] for h in hits])
+                return self._send(200, response)
         self._send(400, {"error": f"unsupported POST {self.path}"})
+
+    def _run_aggs(self, aggs: dict, docs: list[dict]) -> dict:
+        """Minimal top-level terms aggregation (used for field-value lists)."""
+        out = {}
+        for name, spec in aggs.items():
+            if "terms" not in spec:
+                continue
+            field = spec["terms"].get("field")
+            size = int(spec["terms"].get("size", 10))
+            counts: dict = {}
+            for d in docs:
+                v = d.get(field)
+                if v is None or v == "":
+                    continue
+                counts[v] = counts.get(v, 0) + 1
+            buckets = sorted(counts.items(), key=lambda kv: (-kv[1], str(kv[0])))[:size]
+            out[name] = {"buckets": [{"key": k, "doc_count": c} for k, c in buckets]}
+        return out
 
     def _bulk(self, raw: bytes):
         lines = [ln for ln in raw.decode("utf-8").splitlines() if ln.strip()]

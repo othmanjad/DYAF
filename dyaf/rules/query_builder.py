@@ -95,6 +95,28 @@ def _metric_agg(agg: dict) -> Optional[dict]:
             "denominator": den,
             "metric": {"bucket_script": {"buckets_path": paths, "script": script}},
         }
+    if agg_type == "compare":
+        def side_aggs(side: dict) -> dict:
+            side = side or {}
+            node: dict = {"filter": build_bool_query(side.get("condition"))}
+            stype = side.get("type", "count")
+            if stype != "count":
+                es_metric = _AGG_METRIC_MAP.get(stype, stype)
+                node["aggs"] = {"measure": {es_metric: {"field": side.get("field")}}}
+            return node
+
+        left, right = cfg.get("left") or {}, cfg.get("right") or {}
+        paths = {
+            "l": "left>" + ("_count" if left.get("type", "count") == "count" else "measure"),
+            "r": "right>" + ("_count" if right.get("type", "count") == "count" else "measure"),
+        }
+        script = "params.l - params.r" if cfg.get("operation", "subtract") == "subtract" \
+            else "params.l / params.r"
+        return {
+            "left": side_aggs(left),
+            "right": side_aggs(right),
+            "metric": {"bucket_script": {"buckets_path": paths, "script": script}},
+        }
     if agg_type == "moving_average":
         return {"metric": {"avg": {"field": field}},
                 "_comment": "moving_average is computed over a date_histogram in streaming mode (future support)"}

@@ -53,6 +53,9 @@ class DataSourceRegistry:
     def register(self, source: DataSource) -> None:
         self._sources[source.name] = source
 
+    def unregister(self, name: str) -> None:
+        self._sources.pop(name, None)
+
     def get(self, name: str) -> DataSource:
         if name not in self._sources:
             raise KeyError(f"Unknown datasource: {name}")

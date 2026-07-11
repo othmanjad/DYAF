@@ -160,6 +160,25 @@ def validate_rule(defn: dict, known_fields: Optional[set[str]] = None,
             for sub in ("numerator_condition", "denominator_condition"):
                 if cfg.get(sub):
                     errors.extend(conditions.validate(cfg[sub], known_fields, path=f"aggregation.{sub}"))
+            if agg_type == "compare":
+                if cfg.get("operation", "subtract") not in ("subtract", "divide"):
+                    errors.append("compare.operation must be 'subtract' or 'divide'")
+                for side_name in ("left", "right"):
+                    side = cfg.get(side_name)
+                    if not isinstance(side, dict):
+                        errors.append(f"Aggregation 'compare' requires config.{side_name}")
+                        continue
+                    stype = side.get("type", "count")
+                    if stype == "compare" or not aggregations.is_registered(stype):
+                        errors.append(f"compare.{side_name}.type '{stype}' is not a valid sub-aggregation")
+                    elif aggregations.needs_field(stype):
+                        if not side.get("field"):
+                            errors.append(f"compare.{side_name} ({stype}) requires a field")
+                        elif known_fields is not None and side["field"] not in known_fields:
+                            errors.append(f"compare.{side_name}: unknown field '{side['field']}'")
+                    if side.get("condition"):
+                        errors.extend(conditions.validate(side["condition"], known_fields,
+                                                          path=f"aggregation.{side_name}.condition"))
     else:
         # Match mode: every matching record raises an alert, so an
         # unconditioned rule would alert on the entire index.

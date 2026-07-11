@@ -80,6 +80,16 @@ CREATE TABLE IF NOT EXISTS rule_versions (
     PRIMARY KEY (rule_id, version)
 );
 
+CREATE TABLE IF NOT EXISTS datasource_configs (
+    name            TEXT PRIMARY KEY,
+    es_index        TEXT NOT NULL,
+    timestamp_field TEXT,
+    id_field        TEXT,
+    required_fields TEXT DEFAULT '[]',
+    enrichments     TEXT DEFAULT '[]',
+    builtin         INTEGER DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS alerts (
     alert_id             TEXT PRIMARY KEY,
     rule_id              TEXT NOT NULL,
@@ -208,6 +218,39 @@ class Database:
     # ------------------------------------------------------------------
     # Internal wallets (settings screen)
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Datasource configurations (dynamic detection sources)
+    # ------------------------------------------------------------------
+    def upsert_datasource_config(self, cfg: dict) -> None:
+        self.execute(
+            """INSERT OR REPLACE INTO datasource_configs
+               (name, es_index, timestamp_field, id_field, required_fields,
+                enrichments, builtin)
+               VALUES (?,?,?,?,?,?,?)""",
+            (cfg["name"], cfg["es_index"], cfg.get("timestamp_field"),
+             cfg.get("id_field"), json.dumps(cfg.get("required_fields") or []),
+             json.dumps(cfg.get("enrichments") or []), int(bool(cfg.get("builtin")))),
+        )
+
+    def _hydrate_ds_config(self, row: dict) -> dict:
+        row["required_fields"] = json.loads(row["required_fields"] or "[]")
+        row["enrichments"] = json.loads(row["enrichments"] or "[]")
+        row["builtin"] = bool(row["builtin"])
+        return row
+
+    def list_datasource_configs(self) -> list[dict]:
+        return [self._hydrate_ds_config(r) for r in
+                self.query("SELECT * FROM datasource_configs ORDER BY builtin DESC, name")]
+
+    def get_datasource_config(self, name: str) -> Optional[dict]:
+        rows = self.query("SELECT * FROM datasource_configs WHERE name = ?", (name,))
+        return self._hydrate_ds_config(rows[0]) if rows else None
+
+    def delete_datasource_config(self, name: str) -> bool:
+        cur = self.execute(
+            "DELETE FROM datasource_configs WHERE name = ? AND builtin = 0", (name,))
+        return cur.rowcount > 0
+
     def upsert_internal_wallet(self, cfg: InternalWalletConfig) -> None:
         self.execute(
             "INSERT OR REPLACE INTO internal_wallets (wallet_id, name, description) VALUES (?,?,?)",

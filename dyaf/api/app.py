@@ -79,18 +79,56 @@ class StatusBody(BaseModel):
     investigation_status: str
 
 
-def build_registry(es_url: str, **auth) -> DataSourceRegistry:
+BUILTIN_DATASOURCES = [
+    {"name": "transactions", "es_index": "transactions",
+     "timestamp_field": "executed_at", "id_field": "transaction_id",
+     "required_fields": ["transaction_id", "sender_wallet_id", "receiver_wallet_id",
+                         "amount", "executed_at", "transaction_type_id"],
+     "enrichments": ingest.DEFAULT_TRANSACTION_ENRICHMENTS, "builtin": True},
+    {"name": "wallets", "es_index": "wallets",
+     "timestamp_field": None, "id_field": "wallet_id",
+     "required_fields": ["wallet_id", "owner_name"],
+     "enrichments": [], "builtin": True},
+    {"name": "wallet_transactions", "es_index": "wallet_transactions",
+     "timestamp_field": "executed_at", "id_field": "doc_id",
+     "required_fields": [], "enrichments": [], "builtin": True},
+]
+
+_BUILTIN_MAPPINGS = {
+    "transactions": ingest.transactions_mappings,
+    "wallets": ingest.wallets_mappings,
+    "wallet_transactions": ingest.wallet_transactions_mappings,
+}
+
+
+def _dynamic_mappings(timestamp_field: Optional[str]) -> dict:
+    props = {timestamp_field: {"type": "date"}} if timestamp_field else {}
+    return {
+        "dynamic": True,
+        "dynamic_templates": [
+            {"strings_as_keywords": {
+                "match_mapping_type": "string", "mapping": {"type": "keyword"}}},
+        ],
+        "properties": props,
+    }
+
+
+def source_from_config(cfg: dict, es_url: str, auth: dict) -> ElasticsearchDataSource:
+    mappings_fn = _BUILTIN_MAPPINGS.get(cfg["name"])
+    mappings = mappings_fn() if mappings_fn else _dynamic_mappings(cfg.get("timestamp_field"))
+    return ElasticsearchDataSource(
+        es_url, index=cfg["es_index"], name=cfg["name"],
+        timestamp_field=cfg.get("timestamp_field") or None,
+        mappings=mappings, **auth)
+
+
+def build_registry(db: Database, es_url: str, **auth) -> DataSourceRegistry:
+    if not db.list_datasource_configs():
+        for cfg in BUILTIN_DATASOURCES:
+            db.upsert_datasource_config(cfg)
     registry = DataSourceRegistry()
-    registry.register(ElasticsearchDataSource(
-        es_url, index="transactions", timestamp_field="executed_at",
-        mappings=ingest.transactions_mappings(), **auth))
-    registry.register(ElasticsearchDataSource(
-        es_url, index="wallets", timestamp_field=None,
-        mappings=ingest.wallets_mappings(), **auth))
-    # per-direction (debit/credit) view for entity-centric rules
-    registry.register(ElasticsearchDataSource(
-        es_url, index="wallet_transactions", timestamp_field="executed_at",
-        mappings=ingest.wallet_transactions_mappings(), **auth))
+    for cfg in db.list_datasource_configs():
+        registry.register(source_from_config(cfg, es_url, auth))
     return registry
 
 
@@ -112,7 +150,7 @@ def create_app(db_path: str = ":memory:", es_url: Optional[str] = None,
     auth = es_auth if es_auth is not None else {
         k: v for k, v in env_cfg.items() if k != "es_url"}
     db = Database(db_path)
-    registry = build_registry(es_url, **auth)
+    registry = build_registry(db, es_url, **auth)
 
     rules_repo = RuleRepository(db)
     alerts_repo = AlertRepository(db)
@@ -192,15 +230,95 @@ def create_app(db_path: str = ":memory:", es_url: Optional[str] = None,
         return result
 
     # ------------------------------------------------------------------
+    # Datasource configuration (dynamic sources — no code changes needed)
+    # ------------------------------------------------------------------
+    @app.get("/api/datasource-configs")
+    def list_datasource_configs():
+        return db.list_datasource_configs()
+
+    @app.post("/api/datasource-configs", status_code=201)
+    def create_datasource_config(cfg: dict):
+        name = (cfg.get("name") or "").strip()
+        es_index = (cfg.get("es_index") or name).strip()
+        if not name or not name.replace("_", "").replace("-", "").isalnum():
+            raise HTTPException(422, "name is required (letters, digits, - or _)")
+        existing = db.get_datasource_config(name)
+        if existing and existing["builtin"]:
+            raise HTTPException(422, f"'{name}' is a built-in datasource")
+        for e in cfg.get("enrichments") or []:
+            if e.get("lookup") not in ingest.LOOKUPS:
+                raise HTTPException(422, f"Unknown enrichment lookup '{e.get('lookup')}'"
+                                         f" (available: {sorted(ingest.LOOKUPS)})")
+            if not e.get("key_field"):
+                raise HTTPException(422, "Each enrichment needs a key_field")
+        record = {
+            "name": name, "es_index": es_index,
+            "timestamp_field": (cfg.get("timestamp_field") or "").strip() or None,
+            "id_field": (cfg.get("id_field") or "").strip() or None,
+            "required_fields": cfg.get("required_fields") or [],
+            "enrichments": cfg.get("enrichments") or [],
+            "builtin": False,
+        }
+        db.upsert_datasource_config(record)
+        source = source_from_config(record, es_url, auth)
+        registry.register(source)
+        created = source.ensure_index() if source.ping() else {"created": False,
+                                                               "warning": "ES unreachable"}
+        return {**record, "index_setup": created}
+
+    @app.delete("/api/datasource-configs/{name}")
+    def delete_datasource_config(name: str):
+        cfg = db.get_datasource_config(name)
+        if not cfg:
+            raise HTTPException(404, "Datasource not found")
+        if cfg["builtin"]:
+            raise HTTPException(422, "Built-in datasources cannot be deleted")
+        db.delete_datasource_config(name)
+        registry.unregister(name)
+        return {"deleted": name, "note": "the Elasticsearch index itself was kept"}
+
+    @app.get("/api/datasources/{name}/fields/{field}/values")
+    def field_values(name: str, field: str, size: int = 50):
+        source = get_source(name)
+        try:
+            values = source.field_values(field, size=size)
+        except ElasticsearchError as e:
+            raise HTTPException(503, str(e))
+        except requests.RequestException:
+            raise HTTPException(503, f"Elasticsearch is not reachable at {es_url}")
+        return {"field": field, "values": values}
+
+    # ------------------------------------------------------------------
     # CSV template + upload
     # ------------------------------------------------------------------
     @app.get("/api/datasources/{name}/csv-template")
     def csv_template(name: str):
-        get_source(name)
+        source = get_source(name)
         try:
             content = ingest.csv_template(name)
-        except ValueError as e:
-            raise HTTPException(404, str(e))
+        except ValueError:
+            # dynamic datasource: derive the template from its config + live mapping
+            cfg = db.get_datasource_config(name)
+            if not cfg or name == "wallet_transactions":
+                raise HTTPException(404, f"No CSV template for datasource '{name}'")
+            cols = list(cfg["required_fields"])
+            if source.ping() and source.index_exists():
+                meta = {"doc_id"}
+                for fld in source.get_fields():
+                    if fld.name not in cols and fld.name not in meta:
+                        cols.append(fld.name)
+            if cfg.get("id_field") and cfg["id_field"] not in cols:
+                cols.insert(0, cfg["id_field"])
+            if cfg.get("timestamp_field") and cfg["timestamp_field"] not in cols:
+                cols.append(cfg["timestamp_field"])
+            if not cols:
+                cols = ["id", "value"]
+            import csv as _csv
+            import io as _io
+            buf = _io.StringIO()
+            _csv.writer(buf).writerow(cols)
+            _csv.writer(buf).writerow(["" for _ in cols])
+            content = buf.getvalue()
         return PlainTextResponse(
             content, media_type="text/csv",
             headers={"Content-Disposition": f'attachment; filename="{name}_template.csv"'})
@@ -215,6 +333,7 @@ def create_app(db_path: str = ":memory:", es_url: Optional[str] = None,
         except UnicodeDecodeError:
             raise HTTPException(422, "File must be UTF-8 encoded CSV")
 
+        cfg = db.get_datasource_config(name)
         if name == "transactions":
             rows, errors = ingest.parse_transactions_csv(content)
             # keep the operational store consistent, then index enriched docs
@@ -232,6 +351,14 @@ def create_app(db_path: str = ":memory:", es_url: Optional[str] = None,
                 db.upsert_wallet(ingest.wallet_model_from_row(row))
             docs = rows
             id_field = "wallet_id"
+        elif name == "wallet_transactions":
+            raise HTTPException(422, "wallet_transactions is derived automatically "
+                                     "from transactions uploads")
+        elif cfg is not None:
+            # dynamic datasource: any column structure, config-driven ingest
+            rows, errors = ingest.parse_csv(content, tuple(cfg["required_fields"]))
+            docs = ingest.apply_enrichments(db, rows, cfg["enrichments"])
+            id_field = cfg.get("id_field")
         else:
             raise HTTPException(422, f"CSV upload is not supported for datasource '{name}'")
 
@@ -255,6 +382,7 @@ def create_app(db_path: str = ":memory:", es_url: Optional[str] = None,
             "target_entities": [e.value for e in TargetEntity],
             "severities": [s.value for s in AlertSeverity],
             "time_units": ["minutes", "hours", "days", "weeks"],
+            "enrichment_lookups": sorted(ingest.LOOKUPS),
             "es_url": es_url,
         }
 

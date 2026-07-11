@@ -150,9 +150,21 @@ Detection Time · Rule Version · Rule Result · Investigation Status
 يظهر تلقائياً في الـ Rule Builder ويصبح قابلاً للاستخدام في القواعد فوراً.
 
 ### §10 Extensibility
+- **مصادر بيانات ديناميكية بدون كود**: من تبويب Data (أو `POST /api/datasource-configs`)
+  يسجّل المسؤول أي فهرس Elasticsearch كمصدر قواعد جديد — الاسم، حقل الوقت، حقل المعرف،
+  الأعمدة الإجبارية للـ CSV، وقواعد الإثراء — ويظهر فوراً في الـ Rule Builder وواجهة
+  الاستيراد، مع إنشاء الفهرس تلقائياً وقالب CSV مشتق من إعداداته.
+- **إثراء قابل للتهيئة**: قواعد الدمج تُعرَّف لكل مصدر كقائمة
+  `{key_field, lookup, prefix}` ضد جداول المنصة المرجعية
+  (wallets / transaction_types / internal_wallets) بدل أن تكون في الكود.
+- **تجميع `compare` العام**: قارن أي تجميعين تبنيهما بحرية — نوع (count/sum/avg/min/max/
+  distinct_count) + حقل + فلتر لكل طرف، والعملية طرح أو قسمة — مثل
+  «عدد حركات debit − عدد حركات credit > 0» أو «متوسط صرف اليوم ÷ المتوسط العام > 5».
+- **قيم الشروط كقوائم منسدلة**: حقل القيمة في الشروط يقترح القيم الفعلية الموجودة في
+  الفهرس (terms aggregation عبر `/api/datasources/{ds}/fields/{field}/values`)
+  بدل الكتابة اليدوية.
 - `conditions.register_operator(...)` — مشغّلات مقارنة جديدة.
 - `aggregations.register(...)` — تجميعات جديدة (ML scores, behavioral metrics, ...).
-- `DataSourceRegistry.register(...)` — مصادر/فهارس جديدة بدون تعديل المحرك.
 - التنبيهات والقواعد كيانات مستقلة → يمكن ربط Case Management / Workflow Engine فوقها.
 
 ## REST API
@@ -164,6 +176,8 @@ Detection Time · Rule Version · Rule Result · Investigation Status
 | GET | `/api/datasources/{name}/csv-template` | تنزيل قالب CSV (header + صف مثال) |
 | POST | `/api/datasources/{name}/upload-csv` | رفع ملف CSV وفهرسته (multipart) |
 | GET | `/api/datasources/{name}/fields` | اكتشاف الحقول ديناميكياً من الـ mapping |
+| GET | `/api/datasources/{name}/fields/{field}/values` | القيم الفعلية لحقل (لقوائم الاقتراح) |
+| GET/POST/DELETE | `/api/datasource-configs` | إدارة مصادر البيانات الديناميكية |
 | GET | `/api/metadata` | مصادر البيانات، المشغّلات، التجميعات، الكيانات، الخطورات |
 | POST | `/api/rules/validate` | التحقق من تعريف القاعدة |
 | POST | `/api/rules/preview` | معاينة استعلام Elasticsearch DSL |

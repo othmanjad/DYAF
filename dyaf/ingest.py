@@ -171,26 +171,71 @@ def explode_wallet_transactions(rows: list[dict]) -> list[dict]:
 
 
 # ----------------------------------------------------------------------
-# Enrichment (shared by seeding + CSV upload)
+# Configurable enrichment (shared by seeding + CSV upload)
+#
+# An enrichment is {"key_field", "lookup", "prefix"}: for each row, the
+# value of key_field is looked up in a platform reference table and the
+# lookup's output columns are attached with the prefix. Enrichment lists
+# are stored per-datasource in datasource_configs, so admins can wire new
+# joins from settings without code changes.
 # ----------------------------------------------------------------------
 
-def enrich_transactions(db: Database, rows: list[dict]) -> list[dict]:
-    """Denormalize wallet, type and internal-wallet data onto transaction docs."""
-    wallets = {w["wallet_id"]: w for w in db.list_wallets()}
-    types = {t["type_id"]: t for t in db.list_transaction_types()}
-    internal = {iw["wallet_id"]: iw for iw in db.list_internal_wallets()}
-    for r in rows:
-        for prefix, key in (("sender", "sender_wallet_id"), ("receiver", "receiver_wallet_id")):
-            w = wallets.get(r.get(key)) or {}
-            for wk, wv in w.items():
-                if wk != "wallet_id":
-                    r[f"{prefix}_{wk}"] = wv
-            iw = internal.get(r.get(key))
-            r[f"{prefix}_internal_wallet_name"] = iw["name"] if iw else None
-        t = types.get(r.get("transaction_type_id")) or {}
-        r["transaction_type_en"] = t.get("name_en")
-        r["transaction_type_ar"] = t.get("name_ar")
+def _wallets_lookup(db: Database) -> tuple[dict, dict]:
+    rows = {w["wallet_id"]: w for w in db.list_wallets()}
+    columns = None  # None => every column except the key, name kept as-is
+    return rows, columns
+
+
+def _transaction_types_lookup(db: Database) -> tuple[dict, dict]:
+    rows = {t["type_id"]: t for t in db.list_transaction_types()}
+    return rows, {"name_en": "transaction_type_en", "name_ar": "transaction_type_ar"}
+
+
+def _internal_wallets_lookup(db: Database) -> tuple[dict, dict]:
+    rows = {iw["wallet_id"]: iw for iw in db.list_internal_wallets()}
+    return rows, {"name": "internal_wallet_name"}
+
+
+LOOKUPS = {
+    "wallets": {"fn": _wallets_lookup, "key": "wallet_id"},
+    "transaction_types": {"fn": _transaction_types_lookup, "key": "type_id"},
+    "internal_wallets": {"fn": _internal_wallets_lookup, "key": "wallet_id"},
+}
+
+# Reproduces the platform's canonical transaction enrichment
+DEFAULT_TRANSACTION_ENRICHMENTS = [
+    {"key_field": "sender_wallet_id", "lookup": "wallets", "prefix": "sender_"},
+    {"key_field": "receiver_wallet_id", "lookup": "wallets", "prefix": "receiver_"},
+    {"key_field": "sender_wallet_id", "lookup": "internal_wallets", "prefix": "sender_"},
+    {"key_field": "receiver_wallet_id", "lookup": "internal_wallets", "prefix": "receiver_"},
+    {"key_field": "transaction_type_id", "lookup": "transaction_types", "prefix": ""},
+]
+
+
+def apply_enrichments(db: Database, rows: list[dict], enrichments: list[dict]) -> list[dict]:
+    """Attach prefixed lookup columns to each row per the enrichment config."""
+    for e in enrichments or []:
+        lookup = LOOKUPS.get(e.get("lookup"))
+        if not lookup:
+            continue
+        table, columns = lookup["fn"](db)
+        key_field, prefix = e.get("key_field"), e.get("prefix", "")
+        key_name = lookup["key"]
+        for r in rows:
+            match = table.get(r.get(key_field)) or {}
+            if columns is None:
+                for col, val in match.items():
+                    if col != key_name:
+                        r[f"{prefix}{col}"] = val
+            else:
+                for col, out_name in columns.items():
+                    r[f"{prefix}{out_name}"] = match.get(col)
     return rows
+
+
+def enrich_transactions(db: Database, rows: list[dict]) -> list[dict]:
+    """Canonical enrichment for the transactions datasource."""
+    return apply_enrichments(db, rows, DEFAULT_TRANSACTION_ENRICHMENTS)
 
 
 # ----------------------------------------------------------------------
