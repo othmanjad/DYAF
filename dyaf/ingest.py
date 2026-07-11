@@ -50,7 +50,7 @@ def transaction_csv_columns() -> list[str]:
 
 
 def wallet_csv_columns() -> list[str]:
-    return [f.name for f in dc_fields(Wallet)]
+    return [f.name for f in dc_fields(Wallet) if f.name != "extra"]
 
 
 def csv_template(datasource: str) -> str:
@@ -315,6 +315,7 @@ def transaction_model_from_row(row: dict) -> Transaction:
 
 
 def wallet_model_from_row(row: dict) -> Wallet:
-    base = set(wallet_csv_columns())
+    base = set(wallet_csv_columns()) - {"extra"}
     kwargs = {k: row[k] for k in base if k in row and row[k] is not None}
-    return Wallet(**kwargs)
+    extra = {k: v for k, v in row.items() if k not in base and v is not None}
+    return Wallet(extra=extra, **kwargs)

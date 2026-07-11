@@ -170,6 +170,11 @@ def _agg_compare(rows, field, config):
     operation = config.get("operation", "subtract")
     if operation == "divide":
         return left / right if right != 0 else 0.0
+    if operation == "left_when_right_zero":
+        # "new behavior" semantics: left counts only when the right side is
+        # completely absent — dormant account reactivation, first-ever
+        # activity of a kind, etc.
+        return left if right == 0 else 0.0
     return left - right
 
 

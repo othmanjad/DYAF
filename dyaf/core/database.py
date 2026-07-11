@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS wallets (
     kyc_status          TEXT,
     pep_status          INTEGER DEFAULT 0,
     wallet_type         TEXT,
-    created_at          TEXT
+    created_at          TEXT,
+    extra               TEXT DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS transaction_types (
@@ -127,6 +128,8 @@ class Database:
         wallet_cols = {c["name"] for c in self.query("PRAGMA table_info(wallets)")}
         if "created_at" not in wallet_cols:
             self.execute("ALTER TABLE wallets ADD COLUMN created_at TEXT")
+        if "extra" not in wallet_cols:
+            self.execute("ALTER TABLE wallets ADD COLUMN extra TEXT DEFAULT '{}'")
 
     def execute(self, sql: str, params: Iterable = ()) -> sqlite3.Cursor:
         with self._lock:
@@ -147,26 +150,26 @@ class Database:
         self.execute(
             """INSERT OR REPLACE INTO wallets
                (wallet_id, owner_name, nationality, residence_country, date_of_birth,
-                risk_rating, kyc_status, pep_status, wallet_type, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                risk_rating, kyc_status, pep_status, wallet_type, created_at, extra)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (w.wallet_id, w.owner_name, w.nationality, w.residence_country, dob,
              w.risk_rating, w.kyc_status, int(bool(w.pep_status)), w.wallet_type,
-             w.created_at),
+             w.created_at, json.dumps(w.extra or {})),
         )
+
+    def _hydrate_wallet(self, row: dict) -> dict:
+        row["pep_status"] = bool(row["pep_status"])
+        extra = json.loads(row.pop("extra", None) or "{}")
+        row.update(extra)
+        return row
 
     def get_wallet(self, wallet_id: str) -> Optional[dict]:
         rows = self.query("SELECT * FROM wallets WHERE wallet_id = ?", (wallet_id,))
-        if not rows:
-            return None
-        row = rows[0]
-        row["pep_status"] = bool(row["pep_status"])
-        return row
+        return self._hydrate_wallet(rows[0]) if rows else None
 
     def list_wallets(self) -> list[dict]:
-        rows = self.query("SELECT * FROM wallets ORDER BY wallet_id")
-        for r in rows:
-            r["pep_status"] = bool(r["pep_status"])
-        return rows
+        return [self._hydrate_wallet(r) for r in
+                self.query("SELECT * FROM wallets ORDER BY wallet_id")]
 
     # ------------------------------------------------------------------
     # Transaction types

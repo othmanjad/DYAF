@@ -27,6 +27,17 @@ from typing import Optional
 
 def _as_datetime(v) -> Optional[datetime]:
     if isinstance(v, str):
+        # ES-style date math (now-7d, now+1h, ...) like a real cluster
+        m = re.match(r"^now(?:([+-])(\d+)([smhdw]))?$", v.strip())
+        if m:
+            from datetime import timedelta
+            now = datetime.now(timezone.utc)
+            sign, num, unit = m.groups()
+            if not sign:
+                return now
+            units = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
+            delta = timedelta(**{units[unit]: int(num)})
+            return now - delta if sign == "-" else now + delta
         try:
             dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
             return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)

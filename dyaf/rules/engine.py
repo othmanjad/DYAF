@@ -19,7 +19,7 @@ from ..alerts.repository import AlertRepository
 from ..core.database import Database
 from ..datasources.base import DataSourceRegistry
 from . import aggregations
-from .models import Rule, TargetEntity, check_threshold
+from .models import Rule, TargetEntity, check_threshold, resolve_threshold
 
 MAX_SAMPLE_TRANSACTIONS = 20
 
@@ -122,7 +122,18 @@ class RuleEngine:
         for key, group_rows in sorted(groups.items()):
             value = aggregations.compute(agg.get("type", "count"), group_rows,
                                          field=agg.get("field"), config=agg.get("config"))
-            matched = check_threshold(value, threshold)
+            baseline_row = group_rows[0]
+            if threshold.get("value_field"):
+                # older documents may predate the attribute — use the first
+                # row in the group that actually carries a baseline value
+                baseline_row = next(
+                    (r for r in group_rows
+                     if r.get(threshold["value_field"]) not in (None, "")),
+                    group_rows[0])
+            effective_threshold = resolve_threshold(threshold, baseline_row)
+            if effective_threshold is None:
+                continue  # entity has no baseline value for this threshold
+            matched = check_threshold(value, effective_threshold)
             tx_ids = [r["transaction_id"] for r in group_rows if r.get("transaction_id")]
             result = GroupResult(
                 group_key=key, row_count=len(group_rows), aggregation_value=round(value, 6),
@@ -131,7 +142,8 @@ class RuleEngine:
             group_results.append(result)
             if matched:
                 alert = self._build_alert(rule, result, group_rows,
-                                          match_mode=match_mode, threshold=threshold)
+                                          match_mode=match_mode,
+                                          threshold=effective_threshold)
                 alerts.append(alert)
                 if not dry_run and key not in open_keys:
                     self.alert_repo.save(alert)
@@ -181,7 +193,10 @@ class RuleEngine:
             "group_by": rule.group_by,
             "aggregation": rule.aggregation,
             "aggregation_value": result.aggregation_value,
-            "threshold": rule.threshold if not match_mode else None,
+            # effective threshold: for per-entity (value_field) thresholds this
+            # is the resolved multiplier × baseline for THIS entity
+            "threshold": threshold if not match_mode else None,
+            "configured_threshold": rule.threshold if not match_mode else None,
             "row_count": result.row_count,
         }
         if match_mode and len(rows) == 1:

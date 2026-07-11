@@ -12,7 +12,8 @@ Shape:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
 LOGIC_OPERATORS = ("AND", "OR", "NOT")
@@ -33,11 +34,30 @@ def _to_num(v):
         return None
 
 
+_DATE_MATH = re.compile(r"^now(?:([+-])(\d+)([smhdw]))?$")
+_DATE_MATH_UNITS = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
+
+
 def _to_dt(v) -> Optional[datetime]:
-    """Parse ISO 8601 datetimes (naive values are assumed UTC)."""
+    """Parse ISO 8601 datetimes and Elasticsearch-style date math.
+
+    Supports relative expressions like ``now``, ``now-7d``, ``now-24h``
+    (units: s/m/h/d/w), resolved against the current UTC time — the same
+    syntax Elasticsearch evaluates natively in range queries, so rules
+    behave identically locally and when pushed down to the cluster.
+    Naive absolute values are assumed UTC.
+    """
     if isinstance(v, datetime):
         return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
     if isinstance(v, str):
+        m = _DATE_MATH.match(v.strip())
+        if m:
+            now = datetime.now(timezone.utc)
+            sign, num, unit = m.groups()
+            if not sign:
+                return now
+            delta = timedelta(**{_DATE_MATH_UNITS[unit]: int(num)})
+            return now - delta if sign == "-" else now + delta
         try:
             dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
             return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)

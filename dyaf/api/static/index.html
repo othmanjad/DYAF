@@ -92,7 +92,12 @@ th{color:var(--muted);font-size:11px;text-transform:uppercase}
         <option value="gt">&gt;</option><option value="gte">&ge;</option>
         <option value="lt">&lt;</option><option value="lte">&le;</option>
         <option value="eq">=</option><option value="neq">&ne;</option></select></div>
+      <div id="th-mode-wrap"><label>Threshold Mode</label><select id="r-th-mode" onchange="renderAll()">
+        <option value="fixed">Fixed value</option>
+        <option value="field">Entity field × multiplier</option></select></div>
       <div id="th-v-wrap"><label>Threshold Value</label><input id="r-th-v" type="number" value="10000"></div>
+      <div id="th-field-wrap" class="hidden"><label>Baseline Field (per entity)</label><select id="r-th-field"></select></div>
+      <div id="th-mult-wrap" class="hidden"><label>Multiplier (K×)</label><input id="r-th-mult" type="number" value="3" step="0.1"></div>
     </div>
     <div id="agg-sub" class="hidden">
       <div class="subsec"><label>Numerator Condition</label><div id="agg-num"></div></div>
@@ -102,9 +107,10 @@ th{color:var(--muted);font-size:11px;text-transform:uppercase}
     </div>
     <div id="agg-compare" class="hidden">
       <div class="row" style="margin:8px 0"><label style="margin:0">Operation</label>
-        <select id="cmp-op" style="width:220px">
+        <select id="cmp-op" style="width:320px">
           <option value="subtract">left − right (subtract)</option>
           <option value="divide">left ÷ right (divide)</option>
+          <option value="left_when_right_zero">left only when right = 0 (new / dormant behavior)</option>
         </select></div>
       <div class="subsec"><label>Left Side</label>
         <div class="row"><select id="cmp-l-type" style="width:150px"></select>
@@ -298,6 +304,11 @@ function renderCondition(c,parent,idx,onChange){
   op.value=c.operator;row.appendChild(op);
   const v=document.createElement("input");v.placeholder="value (comma list for in/between)";
   v.value=Array.isArray(c.value)?c.value.join(","):(c.value??"");
+  // relative-time picker for date fields (ES date math: now-7d ...)
+  const REL=["now","now-1h","now-6h","now-24h","now-3d","now-7d","now-14d","now-30d","now-90d","now-180d","now-365d"];
+  const relSel=document.createElement("select");relSel.style.display="none";relSel.style.flex="0 0 150px";
+  relSel.innerHTML='<option value="abs">exact date…</option>'+REL.map(r=>`<option value="${r}">${r}</option>`).join("");
+  if(typeof c.value==="string"&&c.value.startsWith("now"))relSel.value=c.value;
   // suggest existing index values for keyword/boolean fields (datalist)
   const dl=document.createElement("datalist");dl.id="dl-"+(++dlSeq);row.appendChild(dl);
   const ftype=()=>((FIELDS.find(x=>x.name===f.value)||{}).type);
@@ -309,9 +320,12 @@ function renderCondition(c,parent,idx,onChange){
       v.setAttribute("list",dl.id);
     } else {v.removeAttribute("list");dl.innerHTML=""}};
   const syncV=()=>{const needs=(META.operators.find(x=>x.name===op.value)||{}).requires_value!==false;
-    v.style.display=needs?"":"none";
-    // date fields get a native datetime picker for comparison operators
+    // date fields get a relative-time dropdown + native datetime picker
     const wantsDt=isDateField()&&["gt","gte","lt","lte","eq","neq"].includes(op.value);
+    relSel.style.display=(wantsDt&&needs)?"":"none";
+    if(wantsDt&&relSel.value!=="abs"){
+      v.style.display="none";c.value=relSel.value;return}
+    v.style.display=needs?"":"none";
     const newType=wantsDt?"datetime-local":"text";
     if(v.type!==newType){v.type=newType}
     let raw=v.value;
@@ -319,8 +333,9 @@ function renderCondition(c,parent,idx,onChange){
     else if(wantsDt||isDateField()){c.value=raw}   // keep ISO datetime strings as-is
     else c.value=raw!==""&&!isNaN(+raw)?+raw:raw};
   f.onchange=()=>{c.field=f.value;syncV();loadSuggestions()};
-  op.onchange=()=>{c.operator=op.value;syncV()};v.oninput=syncV;v.onchange=syncV;syncV();loadSuggestions();
-  row.appendChild(v);
+  op.onchange=()=>{c.operator=op.value;syncV()};relSel.onchange=syncV;
+  v.oninput=syncV;v.onchange=syncV;syncV();loadSuggestions();
+  row.appendChild(relSel);row.appendChild(v);
   const del=document.createElement("button");del.className="btn subtle danger";del.textContent="✕";
   del.onclick=()=>{parent.conditions.splice(idx,1);onChange()};row.appendChild(del);
   return row;
@@ -336,8 +351,12 @@ function renderAll(){
   const needsField=(META.aggregations.find(a=>a.name===agg)||{}).needs_field;
   $("agg-field-wrap").style.visibility=(needsField&&!matchMode&&!isCompare)?"visible":"hidden";
   // match mode: no threshold needed — one alert per matching record
+  const thMode=$("r-th-mode").value;
   $("th-op-wrap").style.visibility=matchMode?"hidden":"visible";
-  $("th-v-wrap").style.visibility=matchMode?"hidden":"visible";
+  $("th-mode-wrap").style.visibility=matchMode?"hidden":"visible";
+  $("th-v-wrap").style.visibility=(matchMode||thMode==="field")?"hidden":"visible";
+  $("th-field-wrap").classList.toggle("hidden",matchMode||thMode!=="field");
+  $("th-mult-wrap").classList.toggle("hidden",matchMode||thMode!=="field");
   if(needsSub){
     if(!numTree)numTree=newGroup("AND");
     renderGroup(numTree,$("agg-num"),renderAll,1);
@@ -385,13 +404,22 @@ function buildDefinition(){
       a.config={left:side("l"),right:side("r"),operation:$("cmp-op").value};
     }
   }
+  let th=null;
+  if(!matchMode){
+    if($("r-th-mode").value==="field"){
+      th={operator:$("r-th-op").value,value_field:$("r-th-field").value,
+          multiplier:+$("r-th-mult").value||1};
+    } else {
+      th={operator:$("r-th-op").value,value:+$("r-th-v").value};
+    }
+  }
   const d={name:$("r-name").value,description:$("r-desc").value,
     data_source:$("r-ds").value,target_entity:$("r-entity").value,
     group_by:$("r-groupby").value||null,
     execution_frequency:{value:+$("r-freq-v").value,unit:$("r-freq-u").value},
     time_window:{value:+$("r-tw-v").value,unit:$("r-tw-u").value},
     conditions:cleanTree(condTree),aggregation:a,
-    threshold:matchMode?null:{operator:$("r-th-op").value,value:+$("r-th-v").value},
+    threshold:th,
     risk_score:+$("r-risk").value,alert_severity:$("r-sev").value,enabled:true};
   if(editingRuleId)d.rule_id=editingRuleId;
   return d;
@@ -454,7 +482,11 @@ async function editRule(id){const r=await api("/api/rules/"+id);editingRuleId=id
   const agg=r.aggregation||{};
   $("r-agg").value=agg.type||"";
   if(agg.field){$("r-agg-field").value=agg.field;$("r-agg-measure").value=agg.field}
-  if(r.threshold){$("r-th-op").value=r.threshold.operator;$("r-th-v").value=r.threshold.value}
+  if(r.threshold){$("r-th-op").value=r.threshold.operator;
+    if(r.threshold.value_field){$("r-th-mode").value="field";
+      $("r-th-field").value=r.threshold.value_field;
+      $("r-th-mult").value=r.threshold.multiplier??1}
+    else{$("r-th-mode").value="fixed";$("r-th-v").value=r.threshold.value}}
   condTree=r.conditions||newGroup("AND");
   numTree=(agg.config||{}).numerator_condition||null;
   denTree=(agg.config||{}).denominator_condition||null;
@@ -570,6 +602,7 @@ async function loadFields(){
   const m=$("r-agg-measure");m.innerHTML='<option value="">— count —</option>';
   FIELDS.filter(f=>["double","long"].includes(f.type)).forEach(f=>{const o=document.createElement("option");o.value=f.name;o.textContent=f.name;m.appendChild(o)});
   ["cmp-l-field","cmp-r-field"].forEach(id=>fill(id,FIELDS,"name",f=>`${f.name} (${f.type})`));
+  fill("r-th-field",FIELDS.filter(f=>["double","long"].includes(f.type)),"name",f=>f.name);
   Object.keys(VALUES_CACHE).forEach(k=>delete VALUES_CACHE[k]);
   renderAll()}
 

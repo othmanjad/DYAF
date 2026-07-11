@@ -161,8 +161,10 @@ def validate_rule(defn: dict, known_fields: Optional[set[str]] = None,
                 if cfg.get(sub):
                     errors.extend(conditions.validate(cfg[sub], known_fields, path=f"aggregation.{sub}"))
             if agg_type == "compare":
-                if cfg.get("operation", "subtract") not in ("subtract", "divide"):
-                    errors.append("compare.operation must be 'subtract' or 'divide'")
+                if cfg.get("operation", "subtract") not in ("subtract", "divide",
+                                                            "left_when_right_zero"):
+                    errors.append("compare.operation must be 'subtract', 'divide' "
+                                  "or 'left_when_right_zero'")
                 for side_name in ("left", "right"):
                     side = cfg.get(side_name)
                     if not isinstance(side, dict):
@@ -189,10 +191,27 @@ def validate_rule(defn: dict, known_fields: Optional[set[str]] = None,
     if aggregate_mode or th:
         if th.get("operator") not in THRESHOLD_OPERATORS:
             errors.append(f"threshold.operator must be one of {sorted(THRESHOLD_OPERATORS)}")
-        try:
-            float(th.get("value"))
-        except (TypeError, ValueError):
-            errors.append("threshold.value must be numeric")
+        if th.get("value_field"):
+            # per-entity threshold: multiplier × a field of the entity's rows
+            # (e.g. 3 × sender_expected_monthly_volume); value acts as an
+            # optional absolute floor.
+            if known_fields is not None and th["value_field"] not in known_fields:
+                errors.append(f"Unknown threshold.value_field '{th['value_field']}'")
+            try:
+                if float(th.get("multiplier", 1)) <= 0:
+                    errors.append("threshold.multiplier must be > 0")
+            except (TypeError, ValueError):
+                errors.append("threshold.multiplier must be numeric")
+            if th.get("value") not in (None, ""):
+                try:
+                    float(th["value"])
+                except (TypeError, ValueError):
+                    errors.append("threshold.value (floor) must be numeric")
+        else:
+            try:
+                float(th.get("value"))
+            except (TypeError, ValueError):
+                errors.append("threshold.value must be numeric")
 
     rs = defn.get("risk_score")
     try:
@@ -208,6 +227,29 @@ def validate_rule(defn: dict, known_fields: Optional[set[str]] = None,
         errors.extend(conditions.validate(defn["conditions"], known_fields, path="conditions"))
 
     return errors
+
+
+def resolve_threshold(threshold: dict, entity_row: Optional[dict] = None) -> Optional[dict]:
+    """Resolve a threshold to a concrete {operator, value} for one entity.
+
+    With ``value_field`` set, the effective value is multiplier × the
+    entity's field value (read from its rows — e.g. a declared/expected
+    activity attribute denormalized from the wallet), never lower than the
+    optional absolute floor in ``value``. Returns None when the entity has
+    no usable baseline value (the group is skipped).
+    """
+    if not threshold.get("value_field"):
+        return threshold
+    raw = (entity_row or {}).get(threshold["value_field"])
+    try:
+        base = float(raw)
+    except (TypeError, ValueError):
+        return None
+    effective = float(threshold.get("multiplier", 1)) * base
+    floor = threshold.get("value")
+    if floor not in (None, ""):
+        effective = max(effective, float(floor))
+    return {"operator": threshold["operator"], "value": effective}
 
 
 def check_threshold(value: float, threshold: dict) -> bool:

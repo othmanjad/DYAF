@@ -110,8 +110,12 @@ def _metric_agg(agg: dict) -> Optional[dict]:
             "l": "left>" + ("_count" if left.get("type", "count") == "count" else "measure"),
             "r": "right>" + ("_count" if right.get("type", "count") == "count" else "measure"),
         }
-        script = "params.l - params.r" if cfg.get("operation", "subtract") == "subtract" \
-            else "params.l / params.r"
+        operation = cfg.get("operation", "subtract")
+        script = {
+            "subtract": "params.l - params.r",
+            "divide": "params.l / params.r",
+            "left_when_right_zero": "params.r == 0 ? params.l : 0",
+        }.get(operation, "params.l - params.r")
         return {
             "left": side_aggs(left),
             "right": side_aggs(right),

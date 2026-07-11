@@ -42,11 +42,16 @@ class Wallet:
     pep_status: bool = False
     wallet_type: str = WalletType.CUSTOMER.value
     created_at: Optional[str] = None  # wallet creation datetime (ISO 8601)
+    # Free-form custom attributes (e.g. expected_monthly_volume for
+    # profile-deviation rules) — flow through enrichment and indexing.
+    extra: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d = asdict(self)
+        d.pop("extra", None)
         if isinstance(d.get("date_of_birth"), date):
             d["date_of_birth"] = d["date_of_birth"].isoformat()
+        d.update(self.extra or {})
         return d
 
 
