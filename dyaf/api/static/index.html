@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DYAF — AML &amp; Fraud Rule Builder</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{--bg:#f4f6fa;--panel:#fff;--line:#dde3ec;--ink:#1c2733;--muted:#5b6b7d;--accent:#155eef;--danger:#d92d20;--ok:#079455;--warn:#b54708}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+header{background:#0d1b2e;color:#fff;padding:14px 24px;display:flex;align-items:center;gap:16px}
+header h1{font-size:17px;margin:0;font-weight:600}
+header .sub{color:#9fb3cc;font-size:12px}
+nav{display:flex;gap:4px;margin-left:auto}
+nav button{background:transparent;border:1px solid #33445c;color:#cdd9e8;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px}
+nav button.active{background:var(--accent);border-color:var(--accent);color:#fff}
+main{padding:20px 24px;max-width:1280px;margin:0 auto}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:16px}
+.panel h2{margin:0 0 12px;font-size:15px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+label{display:block;font-size:11.5px;color:var(--muted);margin-bottom:3px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+input,select,textarea{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:6px;font-size:13px;background:#fff;color:var(--ink)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button.btn{padding:8px 14px;border:1px solid var(--line);border-radius:7px;background:#fff;cursor:pointer;font-size:13px}
+button.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.btn.subtle{font-size:12px;padding:4px 9px}
+button.btn.danger{color:var(--danger);border-color:#f3c1bc}
+.group{border:1px dashed #b9c6d8;border-radius:8px;padding:10px;margin:8px 0;background:#f8fafd}
+.group>.ghead{display:flex;gap:8px;align-items:center;margin-bottom:6px}
+.group>.ghead select{width:auto;font-weight:700}
+.cond{display:flex;gap:6px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:7px;padding:6px;margin:6px 0;cursor:grab}
+.cond.dragging{opacity:.4}
+.cond .drag{color:#9aa9bb;cursor:grab;padding:0 4px;user-select:none}
+.cond select,.cond input{width:auto;flex:1;min-width:90px}
+pre{background:#0d1b2e;color:#c8e1ff;padding:14px;border-radius:8px;font-size:12px;overflow:auto;max-height:420px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-size:11px;text-transform:uppercase}
+.tag{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11.5px;font-weight:600}
+.tag.High,.tag.Critical{background:#fee4e2;color:var(--danger)}
+.tag.Medium{background:#fef0c7;color:var(--warn)}
+.tag.Low{background:#d1fadf;color:var(--ok)}
+.msg{padding:10px 12px;border-radius:7px;font-size:13px;margin:10px 0;white-space:pre-wrap}
+.msg.err{background:#fee4e2;color:#912018}
+.msg.ok{background:#d1fadf;color:#054f31}
+.hidden{display:none}
+.pill{font-size:11px;background:#eef2f8;border-radius:12px;padding:2px 8px;color:var(--muted)}
+.subsec{border-left:3px solid var(--line);padding-left:12px;margin:10px 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>DYAF</h1><span class="sub">AML &amp; Fraud Detection — Rule Builder</span>
+  <nav>
+    <button data-tab="builder" class="active">Rule Builder</button>
+    <button data-tab="rules">Rules</button>
+    <button data-tab="alerts">Alerts</button>
+    <button data-tab="settings">Internal Wallets</button>
+  </nav>
+</header>
+<main>
+
+<!-- ======================= BUILDER TAB ======================= -->
+<section id="tab-builder">
+  <div class="panel">
+    <h2>Rule Definition</h2>
+    <div class="grid">
+      <div><label>Rule Name</label><input id="r-name" placeholder="e.g. Structuring Detection"></div>
+      <div><label>Data Source</label><select id="r-ds"></select></div>
+      <div><label>Target Entity</label><select id="r-entity"></select></div>
+      <div><label>Group By (entity field)</label><select id="r-groupby"></select></div>
+      <div><label>Execution Frequency</label><div class="row"><input id="r-freq-v" type="number" value="1" style="width:70px"><select id="r-freq-u" style="width:110px"></select></div></div>
+      <div><label>Time Window</label><div class="row"><input id="r-tw-v" type="number" value="24" style="width:70px"><select id="r-tw-u" style="width:110px"></select></div></div>
+      <div><label>Risk Score (0–100)</label><input id="r-risk" type="number" value="70"></div>
+      <div><label>Alert Severity</label><select id="r-sev"></select></div>
+    </div>
+    <div style="margin-top:10px"><label>Description</label><input id="r-desc" placeholder="What does this rule detect?"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Conditions <span class="pill">drag to reorder · nest groups for AND / OR / NOT logic</span></h2>
+    <div id="cond-root"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Aggregation &amp; Threshold</h2>
+    <div class="grid">
+      <div><label>Aggregation Type</label><select id="r-agg"></select></div>
+      <div id="agg-field-wrap"><label>Aggregation Field</label><select id="r-agg-field"></select></div>
+      <div><label>Threshold Operator</label><select id="r-th-op">
+        <option value="gt">&gt;</option><option value="gte">&ge;</option>
+        <option value="lt">&lt;</option><option value="lte">&le;</option>
+        <option value="eq">=</option><option value="neq">&ne;</option></select></div>
+      <div><label>Threshold Value</label><input id="r-th-v" type="number" value="10000"></div>
+    </div>
+    <div id="agg-sub" class="hidden">
+      <div class="subsec"><label>Numerator Condition</label><div id="agg-num"></div></div>
+      <div class="subsec hidden" id="agg-den-wrap"><label>Denominator Condition</label><div id="agg-den"></div></div>
+      <div class="row" style="margin-top:6px"><span class="pill">Optional measure field (blank = count)</span>
+        <select id="r-agg-measure" style="width:220px"></select></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <button class="btn" onclick="doValidate()">Validate</button>
+      <button class="btn" onclick="doPreview()">Preview Query</button>
+      <button class="btn" onclick="doTest()">Test Rule</button>
+      <button class="btn primary" onclick="doSave()">Save Rule</button>
+      <span id="editing-pill" class="pill hidden"></span>
+      <button class="btn subtle hidden" id="cancel-edit" onclick="resetBuilder()">New rule</button>
+    </div>
+    <div id="builder-msg"></div>
+    <div id="preview-wrap" class="hidden"><h2>Elasticsearch Query Preview</h2><pre id="preview-json"></pre></div>
+    <div id="test-wrap" class="hidden"><h2>Test Result (dry run — no alerts saved)</h2><div id="test-summary"></div><pre id="test-json"></pre></div>
+  </div>
+</section>
+
+<!-- ======================= RULES TAB ======================= -->
+<section id="tab-rules" class="hidden">
+  <div class="panel">
+    <h2>Saved Rules <button class="btn subtle" onclick="runScheduler()" style="float:right">Run Scheduler Now</button></h2>
+    <div id="rules-msg"></div>
+    <table><thead><tr><th>Name</th><th>Ver</th><th>Source</th><th>Entity</th><th>Aggregation</th><th>Threshold</th><th>Severity</th><th>Enabled</th><th></th></tr></thead>
+    <tbody id="rules-body"></tbody></table>
+  </div>
+</section>
+
+<!-- ======================= ALERTS TAB ======================= -->
+<section id="tab-alerts" class="hidden">
+  <div class="panel">
+    <h2>Alerts</h2>
+    <table><thead><tr><th>Alert</th><th>Rule (ver)</th><th>Customer</th><th>Wallet</th><th>Value</th><th>Score</th><th>Severity</th><th>Detected</th><th>Status</th></tr></thead>
+    <tbody id="alerts-body"></tbody></table>
+  </div>
+</section>
+
+<!-- ======================= SETTINGS TAB ======================= -->
+<section id="tab-settings" class="hidden">
+  <div class="panel">
+    <h2>Internal Wallet Classification</h2>
+    <p style="font-size:13px;color:var(--muted)">Link an internal (settlement) wallet id to a name and description so its purpose in transaction flows is identifiable across reporting and integrations.</p>
+    <div class="grid">
+      <div><label>Wallet ID</label><input id="iw-id" placeholder="W-9001"></div>
+      <div><label>Name</label><input id="iw-name" placeholder="Card Settlement"></div>
+      <div><label>Description</label><input id="iw-desc"></div>
+    </div>
+    <div class="row" style="margin-top:10px"><button class="btn primary" onclick="saveInternalWallet()">Save</button></div>
+    <div id="iw-msg"></div>
+    <table style="margin-top:12px"><thead><tr><th>Wallet ID</th><th>Name</th><th>Description</th><th></th></tr></thead>
+    <tbody id="iw-body"></tbody></table>
+  </div>
+</section>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+let META=null, FIELDS=[], editingRuleId=null;
+
+async function api(path,opts){const r=await fetch(path,opts);const t=await r.text();let j=null;try{j=t?JSON.parse(t):null}catch(e){}
+  if(!r.ok){const d=(j&&(j.detail||j.errors))||t;throw new Error(Array.isArray(d)?d.join("\n"):String(d))}return j}
+
+/* ---------------- tabs ---------------- */
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("nav button").forEach(x=>x.classList.remove("active"));b.classList.add("active");
+  ["builder","rules","alerts","settings"].forEach(t=>$("tab-"+t).classList.toggle("hidden",t!==b.dataset.tab));
+  if(b.dataset.tab==="rules")loadRules(); if(b.dataset.tab==="alerts")loadAlerts(); if(b.dataset.tab==="settings")loadInternalWallets();
+});
+
+/* ---------------- condition builder (recursive, drag & drop) ---------------- */
+function newGroup(logic){return{logic:logic||"AND",conditions:[]}}
+let condTree=newGroup("AND"), numTree=null, denTree=null;
+
+function renderGroup(node,container,onChange,depth){
+  container.innerHTML="";
+  const g=document.createElement("div");g.className="group";
+  const head=document.createElement("div");head.className="ghead";
+  const sel=document.createElement("select");
+  ["AND","OR","NOT"].forEach(l=>{const o=document.createElement("option");o.value=l;o.textContent=l;sel.appendChild(o)});
+  sel.value=node.logic;sel.onchange=()=>{node.logic=sel.value;onChange()};
+  head.appendChild(sel);
+  const addC=document.createElement("button");addC.className="btn subtle";addC.textContent="+ Condition";
+  addC.onclick=()=>{node.conditions.push({field:FIELDS[0]?.name||"",operator:"eq",value:""});onChange()};
+  const addG=document.createElement("button");addG.className="btn subtle";addG.textContent="+ Group";
+  addG.onclick=()=>{node.conditions.push(newGroup("OR"));onChange()};
+  head.appendChild(addC);head.appendChild(addG);
+  if(depth>0){const del=document.createElement("button");del.className="btn subtle danger";del.textContent="Remove group";
+    del.onclick=()=>{node._remove&&node._remove();onChange()};head.appendChild(del)}
+  g.appendChild(head);
+  const list=document.createElement("div");
+  node.conditions.forEach((child,i)=>{
+    child._remove=()=>node.conditions.splice(i,1);
+    if(child.logic!==undefined){const sub=document.createElement("div");list.appendChild(sub);renderGroup(child,sub,onChange,depth+1)}
+    else list.appendChild(renderCondition(child,node,i,onChange));
+  });
+  g.appendChild(list);container.appendChild(g);
+}
+
+function renderCondition(c,parent,idx,onChange){
+  const row=document.createElement("div");row.className="cond";row.draggable=true;
+  row.ondragstart=e=>{row.classList.add("dragging");e.dataTransfer.setData("text/plain",idx)};
+  row.ondragend=()=>row.classList.remove("dragging");
+  row.ondragover=e=>e.preventDefault();
+  row.ondrop=e=>{e.preventDefault();const from=+e.dataTransfer.getData("text/plain");
+    if(from!==idx){const[m]=parent.conditions.splice(from,1);parent.conditions.splice(idx,0,m);onChange()}};
+  const drag=document.createElement("span");drag.className="drag";drag.textContent="⋮⋮";row.appendChild(drag);
+  const f=document.createElement("select");
+  FIELDS.forEach(fl=>{const o=document.createElement("option");o.value=fl.name;o.textContent=`${fl.name} (${fl.type})`;f.appendChild(o)});
+  f.value=c.field;f.onchange=()=>{c.field=f.value};row.appendChild(f);
+  const op=document.createElement("select");
+  (META.operators||[]).forEach(o2=>{const o=document.createElement("option");o.value=o2.name;o.textContent=o2.name;op.appendChild(o)});
+  op.value=c.operator;row.appendChild(op);
+  const v=document.createElement("input");v.placeholder="value (comma list for in/between)";
+  v.value=Array.isArray(c.value)?c.value.join(","):(c.value??"");
+  const syncV=()=>{const needs=(META.operators.find(x=>x.name===op.value)||{}).requires_value!==false;
+    v.style.display=needs?"":"none";
+    let raw=v.value;
+    if(["in","not_in","between"].includes(op.value)){c.value=raw.split(",").map(s=>s.trim()).filter(s=>s!=="").map(s=>isNaN(+s)?s:+s)}
+    else c.value=raw!==""&&!isNaN(+raw)?+raw:raw};
+  op.onchange=()=>{c.operator=op.value;syncV()};v.oninput=syncV;syncV();
+  row.appendChild(v);
+  const del=document.createElement("button");del.className="btn subtle danger";del.textContent="✕";
+  del.onclick=()=>{parent.conditions.splice(idx,1);onChange()};row.appendChild(del);
+  return row;
+}
+
+function renderAll(){
+  renderGroup(condTree,$("cond-root"),renderAll,0);
+  const agg=$("r-agg").value, needsSub=(agg==="percentage"||agg==="ratio");
+  $("agg-sub").classList.toggle("hidden",!needsSub);
+  $("agg-den-wrap").classList.toggle("hidden",agg!=="ratio");
+  const needsField=(META.aggregations.find(a=>a.name===agg)||{}).needs_field;
+  $("agg-field-wrap").style.visibility=needsField?"visible":"hidden";
+  if(needsSub){
+    if(!numTree)numTree=newGroup("AND");
+    renderGroup(numTree,$("agg-num"),renderAll,1);
+    if(agg==="ratio"){if(!denTree)denTree=newGroup("AND");renderGroup(denTree,$("agg-den"),renderAll,1)}
+  }
+}
+
+/* ---------------- rule assembly ---------------- */
+function cleanTree(n){if(!n)return null;if(n.logic!==undefined){const kids=n.conditions.map(cleanTree).filter(Boolean);
+  return kids.length?{logic:n.logic,conditions:kids}:null}
+  return n.field?{field:n.field,operator:n.operator,value:n.value}:null}
+
+function buildDefinition(){
+  const agg=$("r-agg").value;
+  const a={type:agg};
+  const needsField=(META.aggregations.find(x=>x.name===agg)||{}).needs_field;
+  if(needsField)a.field=$("r-agg-field").value;
+  if(agg==="percentage"||agg==="ratio"){
+    a.config={};const nt=cleanTree(numTree);if(nt)a.config.numerator_condition=nt;
+    if(agg==="ratio"){const dt=cleanTree(denTree);if(dt)a.config.denominator_condition=dt}
+    const m=$("r-agg-measure").value;if(m)a.field=m;
+  }
+  const d={name:$("r-name").value,description:$("r-desc").value,
+    data_source:$("r-ds").value,target_entity:$("r-entity").value,group_by:$("r-groupby").value,
+    execution_frequency:{value:+$("r-freq-v").value,unit:$("r-freq-u").value},
+    time_window:{value:+$("r-tw-v").value,unit:$("r-tw-u").value},
+    conditions:cleanTree(condTree),aggregation:a,
+    threshold:{operator:$("r-th-op").value,value:+$("r-th-v").value},
+    risk_score:+$("r-risk").value,alert_severity:$("r-sev").value,enabled:true};
+  if(editingRuleId)d.rule_id=editingRuleId;
+  return d;
+}
+
+function msg(el,text,ok){$(el).innerHTML=`<div class="msg ${ok?"ok":"err"}">${text}</div>`}
+
+async function doValidate(){try{const r=await api("/api/rules/validate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(buildDefinition())});
+  msg("builder-msg",r.valid?"✔ Rule is valid":r.errors.join("\n"),r.valid)}catch(e){msg("builder-msg",e.message,false)}}
+
+async function doPreview(){try{const r=await api("/api/rules/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(buildDefinition())});
+  if(!r.valid){msg("builder-msg",r.errors.join("\n"),false);return}
+  $("builder-msg").innerHTML="";$("preview-wrap").classList.remove("hidden");
+  $("preview-json").textContent=JSON.stringify(r.query,null,2)}catch(e){msg("builder-msg",e.message,false)}}
+
+async function doTest(){try{const r=await api("/api/rules/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(buildDefinition())});
+  $("test-wrap").classList.remove("hidden");
+  $("test-summary").innerHTML=`<div class="msg ${r.groups_matched?"err":"ok"}">Evaluated ${r.rows_evaluated} rows · ${r.groups_evaluated} entities · <b>${r.groups_matched} would trigger an alert</b></div>`;
+  $("test-json").textContent=JSON.stringify(r.group_results,null,2);msg("builder-msg","✔ Test complete (dry run)",true)}
+  catch(e){msg("builder-msg",e.message,false)}}
+
+async function doSave(){try{const d=buildDefinition();
+  const r=editingRuleId?await api("/api/rules/"+editingRuleId,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)})
+                       :await api("/api/rules",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
+  msg("builder-msg",`✔ Saved '${r.name}' (version ${r.version})`,true);editingRuleId=r.rule_id;
+  $("editing-pill").textContent="Editing: "+r.rule_id;$("editing-pill").classList.remove("hidden");$("cancel-edit").classList.remove("hidden")}
+  catch(e){msg("builder-msg",e.message,false)}}
+
+function resetBuilder(){editingRuleId=null;condTree=newGroup("AND");numTree=null;denTree=null;
+  $("r-name").value="";$("r-desc").value="";$("editing-pill").classList.add("hidden");$("cancel-edit").classList.add("hidden");
+  $("builder-msg").innerHTML="";$("preview-wrap").classList.add("hidden");$("test-wrap").classList.add("hidden");renderAll()}
+
+/* ---------------- rules tab ---------------- */
+async function loadRules(){const rules=await api("/api/rules");
+  $("rules-body").innerHTML=rules.map(r=>`<tr>
+    <td><b>${r.name}</b><br><span class="pill">${r.rule_id}</span></td><td>v${r.version}</td>
+    <td>${r.data_source}</td><td>${r.target_entity}</td>
+    <td>${r.aggregation.type}${r.aggregation.field?" of "+r.aggregation.field:""} by ${r.group_by}</td>
+    <td>${r.threshold.operator} ${r.threshold.value}</td>
+    <td><span class="tag ${r.alert_severity}">${r.alert_severity}</span></td>
+    <td>${r.enabled?"✔":"—"}</td>
+    <td class="row">
+      <button class="btn subtle" onclick='editRule("${r.rule_id}")'>Edit</button>
+      <button class="btn subtle" onclick='execRule("${r.rule_id}")'>Run</button>
+      <button class="btn subtle danger" onclick='delRule("${r.rule_id}")'>Delete</button></td></tr>`).join("")||"<tr><td colspan=9>No rules yet</td></tr>"}
+
+async function execRule(id){try{const r=await api("/api/rules/"+id+"/execute",{method:"POST"});
+  msg("rules-msg",`Executed '${r.rule_name}': ${r.rows_evaluated} rows, ${r.groups_matched} alerts generated`,true)}catch(e){msg("rules-msg",e.message,false)}}
+async function delRule(id){await api("/api/rules/"+id,{method:"DELETE"});loadRules()}
+async function runScheduler(){const r=await api("/api/scheduler/run",{method:"POST"});
+  msg("rules-msg",`Scheduler executed ${r.executed} due rule(s)`,true)}
+
+async function editRule(id){const r=await api("/api/rules/"+id);editingRuleId=id;
+  document.querySelector('nav button[data-tab="builder"]').click();
+  $("r-name").value=r.name;$("r-desc").value=r.description||"";$("r-ds").value=r.data_source;
+  await loadFields();$("r-entity").value=r.target_entity;$("r-groupby").value=r.group_by;
+  $("r-freq-v").value=r.execution_frequency.value;$("r-freq-u").value=r.execution_frequency.unit;
+  $("r-tw-v").value=r.time_window.value;$("r-tw-u").value=r.time_window.unit;
+  $("r-risk").value=r.risk_score;$("r-sev").value=r.alert_severity;
+  $("r-agg").value=r.aggregation.type;if(r.aggregation.field){$("r-agg-field").value=r.aggregation.field;$("r-agg-measure").value=r.aggregation.field}
+  $("r-th-op").value=r.threshold.operator;$("r-th-v").value=r.threshold.value;
+  condTree=r.conditions||newGroup("AND");
+  numTree=(r.aggregation.config||{}).numerator_condition||null;
+  denTree=(r.aggregation.config||{}).denominator_condition||null;
+  $("editing-pill").textContent="Editing: "+id+" (v"+r.version+")";$("editing-pill").classList.remove("hidden");
+  $("cancel-edit").classList.remove("hidden");renderAll()}
+
+/* ---------------- alerts tab ---------------- */
+const STATUSES=["New","In Review","Escalated","Closed - False Positive","Closed - Confirmed"];
+async function loadAlerts(){const alerts=await api("/api/alerts");
+  $("alerts-body").innerHTML=alerts.map(a=>`<tr>
+    <td>${a.alert_id}</td><td>${a.rule_name} (v${a.rule_version})</td>
+    <td>${a.customer??"—"}</td><td>${a.wallet_id??"—"}</td>
+    <td>${a.rule_result.aggregation_value} ${a.rule_result.threshold?`(${a.rule_result.threshold.operator} ${a.rule_result.threshold.value})`:""}</td>
+    <td>${a.risk_score}</td><td><span class="tag ${a.alert_severity}">${a.alert_severity}</span></td>
+    <td>${(a.detection_time||"").replace("T"," ").slice(0,19)}</td>
+    <td><select onchange='setStatus("${a.alert_id}",this.value)'>${STATUSES.map(s=>`<option ${s===a.investigation_status?"selected":""}>${s}</option>`).join("")}</select></td></tr>`).join("")||"<tr><td colspan=9>No alerts</td></tr>"}
+async function setStatus(id,s){await api("/api/alerts/"+id+"/status",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({investigation_status:s})})}
+
+/* ---------------- settings tab ---------------- */
+async function loadInternalWallets(){const iw=await api("/api/internal-wallets");
+  $("iw-body").innerHTML=iw.map(w=>`<tr><td>${w.wallet_id}</td><td>${w.name}</td><td>${w.description}</td>
+    <td><button class="btn subtle danger" onclick='delIW("${w.wallet_id}")'>Delete</button></td></tr>`).join("")||"<tr><td colspan=4>None defined</td></tr>"}
+async function saveInternalWallet(){try{await api("/api/internal-wallets",{method:"POST",headers:{"Content-Type":"application/json"},
+  body:JSON.stringify({wallet_id:$("iw-id").value,name:$("iw-name").value,description:$("iw-desc").value})});
+  msg("iw-msg","✔ Saved",true);loadInternalWallets()}catch(e){msg("iw-msg",e.message,false)}}
+async function delIW(id){await api("/api/internal-wallets/"+id,{method:"DELETE"});loadInternalWallets()}
+
+/* ---------------- init ---------------- */
+function fill(sel,items,val,label){const s=$(sel);s.innerHTML="";items.forEach(i=>{const o=document.createElement("option");
+  o.value=val?i[val]:i;o.textContent=label?label(i):(val?i[val]:i);s.appendChild(o)})}
+
+async function loadFields(){const r=await api("/api/datasources/"+$("r-ds").value+"/fields");FIELDS=r.fields;
+  fill("r-groupby",FIELDS,"name",f=>`${f.name} (${f.type})`);
+  fill("r-agg-field",FIELDS.filter(f=>["double","long"].includes(f.type)),"name",f=>`${f.name} (${f.type})`);
+  const m=$("r-agg-measure");m.innerHTML='<option value="">— count —</option>';
+  FIELDS.filter(f=>["double","long"].includes(f.type)).forEach(f=>{const o=document.createElement("option");o.value=f.name;o.textContent=f.name;m.appendChild(o)});
+  renderAll()}
+
+(async function init(){
+  META=await api("/api/metadata");
+  fill("r-ds",META.datasources);fill("r-entity",META.target_entities);fill("r-sev",META.severities);
+  fill("r-freq-u",META.time_units);fill("r-tw-u",META.time_units);
+  fill("r-agg",META.aggregations,"name",a=>a.name+(a.experimental?" (experimental)":""));
+  $("r-tw-u").value="hours";$("r-freq-u").value="hours";$("r-sev").value="High";
+  $("r-ds").onchange=loadFields;$("r-agg").onchange=renderAll;
+  await loadFields();
+})();
+</script>
+</body>
+</html>
