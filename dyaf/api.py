@@ -28,9 +28,22 @@ def load_dotenv(path: str = ".env") -> None:
     with open(path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            v = v.strip()
+            if v[:1] in ("'", '"') and v.find(v[0], 1) != -1:
+                # quoted value: take it verbatim up to the closing quote
+                v = v[1:v.find(v[0], 1)]
+            else:
+                # drop inline comments (only when preceded by whitespace, so
+                # values legitimately containing '#', e.g. passwords, survive)
+                for i, ch in enumerate(v):
+                    if ch == "#" and i > 0 and v[i - 1] in " \t":
+                        v = v[:i]
+                        break
+                v = v.strip()
+            os.environ.setdefault(k.strip(), v)
 
 
 def es_from_env(es_url: Optional[str] = None) -> EsClient:
