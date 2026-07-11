@@ -117,6 +117,10 @@ dyaf/
 Data Source · Target Entity · Execution Frequency · Time Window · Aggregation Type ·
 Output Threshold · Risk Score · Alert Severity
 
+**نمطا القواعد:**
+- **Aggregation Rule**: تجميع (count/sum/avg/percentage/...) حسب Group By ومقارنة الناتج بالـ Threshold — مثل «5 سحوبات قرب الحد خلال 24 ساعة».
+- **Match Rule**: بدون تجميع (اختر "none") — تنبيه مباشر لكل سجل مطابق للشروط، والـ Group By والـ Threshold اختياريان — مثل «أي حركة قيمتها أكبر من 1000 دينار». التنبيه يتضمن لقطة كاملة من الحركة المطابقة، ومع تحديد Group By يصبح التنبيه لكل كيان (محفظة مثلاً) بدل كل سجل.
+
 ### §7 Alert Generation — كل تنبيه يحتوي:
 Alert ID · Rule Name · Customer · Wallet · Transaction(s) · Risk Score · Alert Severity ·
 Detection Time · Rule Version · Rule Result · Investigation Status

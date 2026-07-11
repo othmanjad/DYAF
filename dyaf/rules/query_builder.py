@@ -101,7 +101,12 @@ def _metric_agg(agg: dict) -> Optional[dict]:
 
 
 def build_rule_query(rule_defn: dict, timestamp_field: Optional[str] = "executed_at") -> dict:
-    """Full ES search body for a rule: filter + time window + group-by aggs."""
+    """Full ES search body for a rule.
+
+    Aggregate mode: filter + time window + group-by terms agg + metric.
+    Match mode (no aggregation): filter + time window returning the
+    matching documents themselves.
+    """
     must = []
     if rule_defn.get("conditions"):
         must.append(build_bool_query(rule_defn["conditions"]))
@@ -110,13 +115,19 @@ def build_rule_query(rule_defn: dict, timestamp_field: Optional[str] = "executed
         unit_abbrev = {"minutes": "m", "hours": "h", "days": "d", "weeks": "w"}.get(tw.get("unit", "hours"), "h")
         must.append({"range": {timestamp_field: {"gte": f"now-{tw.get('value', 1)}{unit_abbrev}", "lte": "now"}}})
 
+    query = {"bool": {"must": must}} if must else {"match_all": {}}
+
+    agg = rule_defn.get("aggregation") or {}
+    if not agg.get("type"):  # match mode — return the matching records
+        return {"size": 10000, "query": query}
+
     group_agg: dict = {"terms": {"field": rule_defn.get("group_by"), "size": 10000}}
-    metric = _metric_agg(rule_defn.get("aggregation") or {"type": "count"})
+    metric = _metric_agg(agg)
     if metric:
         group_agg["aggs"] = metric
 
     return {
         "size": 0,
-        "query": {"bool": {"must": must}} if must else {"match_all": {}},
+        "query": query,
         "aggs": {"by_entity": group_agg},
     }

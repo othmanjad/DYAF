@@ -94,15 +94,23 @@ class RuleEngine:
 
         rows = source.fetch(start=start, end=end, condition=rule.conditions)
 
-        # Group by the target-entity field
-        groups: dict[str, list[dict]] = {}
-        for row in rows:
-            key = row.get(rule.group_by)
-            if key is None:
-                continue
-            groups.setdefault(str(key), []).append(row)
+        # Match mode (no aggregation): each record — or each group_by entity
+        # when one is given — alerts directly. Internally this is count >= 1.
+        match_mode = not (rule.aggregation or {}).get("type")
+        agg = rule.aggregation if not match_mode else {"type": "count"}
+        threshold = rule.threshold or ({"operator": "gte", "value": 1} if match_mode else None)
 
-        agg = rule.aggregation or {"type": "count"}
+        groups: dict[str, list[dict]] = {}
+        if rule.group_by:
+            for row in rows:
+                key = row.get(rule.group_by)
+                if key is None:
+                    continue
+                groups.setdefault(str(key), []).append(row)
+        else:  # per-record grouping (match mode without group_by)
+            for i, row in enumerate(rows):
+                key = row.get("transaction_id") or row.get("wallet_id") or f"record-{i}"
+                groups.setdefault(str(key), []).append(row)
         group_results: list[GroupResult] = []
         alerts: list[Alert] = []
 
@@ -114,7 +122,7 @@ class RuleEngine:
         for key, group_rows in sorted(groups.items()):
             value = aggregations.compute(agg.get("type", "count"), group_rows,
                                          field=agg.get("field"), config=agg.get("config"))
-            matched = check_threshold(value, rule.threshold)
+            matched = check_threshold(value, threshold)
             tx_ids = [r["transaction_id"] for r in group_rows if r.get("transaction_id")]
             result = GroupResult(
                 group_key=key, row_count=len(group_rows), aggregation_value=round(value, 6),
@@ -122,7 +130,8 @@ class RuleEngine:
             )
             group_results.append(result)
             if matched:
-                alert = self._build_alert(rule, result, group_rows)
+                alert = self._build_alert(rule, result, group_rows,
+                                          match_mode=match_mode, threshold=threshold)
                 alerts.append(alert)
                 if not dry_run and key not in open_keys:
                     self.alert_repo.save(alert)
@@ -143,7 +152,13 @@ class RuleEngine:
         first = rows[0] if rows else {}
         if rule.target_entity == TargetEntity.WALLET.value:
             wallet = self.db.get_wallet(group_key)
-            return (wallet["owner_name"] if wallet else None, group_key)
+            if wallet:
+                return (wallet["owner_name"], group_key)
+            # group key is not a wallet id (e.g. per-record match rule):
+            # fall back to the sending wallet of the matched rows
+            wallet_id = first.get("sender_wallet_id") or first.get("wallet_id")
+            wallet = self.db.get_wallet(wallet_id) if wallet_id else None
+            return (wallet["owner_name"] if wallet else None, wallet_id)
         if rule.target_entity == TargetEntity.CUSTOMER.value:
             # group key is a customer attribute; derive a wallet from the rows
             wallet_id = None
@@ -157,19 +172,25 @@ class RuleEngine:
         wallet = self.db.get_wallet(wallet_id) if wallet_id else None
         return (wallet["owner_name"] if wallet else None, wallet_id)
 
-    def _build_alert(self, rule: Rule, result: GroupResult, rows: list[dict]) -> Alert:
+    def _build_alert(self, rule: Rule, result: GroupResult, rows: list[dict],
+                     match_mode: bool = False, threshold: Optional[dict] = None) -> Alert:
         customer, wallet_id = self._resolve_entity(rule, result.group_key, rows)
+        rule_result = {
+            "mode": "match" if match_mode else "aggregate",
+            "group_key": result.group_key,
+            "group_by": rule.group_by,
+            "aggregation": rule.aggregation,
+            "aggregation_value": result.aggregation_value,
+            "threshold": rule.threshold if not match_mode else None,
+            "row_count": result.row_count,
+        }
+        if match_mode and len(rows) == 1:
+            # snapshot of the matched record for direct investigation
+            rule_result["record"] = rows[0]
         return Alert(
             rule_id=rule.rule_id, rule_name=rule.name, rule_version=rule.version,
             risk_score=rule.risk_score, alert_severity=rule.alert_severity,
             customer=customer, wallet_id=wallet_id,
             transaction_ids=result.sample_transaction_ids,
-            rule_result={
-                "group_key": result.group_key,
-                "group_by": rule.group_by,
-                "aggregation": rule.aggregation,
-                "aggregation_value": result.aggregation_value,
-                "threshold": rule.threshold,
-                "row_count": result.row_count,
-            },
+            rule_result=rule_result,
         )

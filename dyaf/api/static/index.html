@@ -84,15 +84,15 @@ th{color:var(--muted);font-size:11px;text-transform:uppercase}
   </div>
 
   <div class="panel">
-    <h2>Aggregation &amp; Threshold</h2>
+    <h2>Aggregation &amp; Threshold <span class="pill">optional — leave "none" to alert on every matching record</span></h2>
     <div class="grid">
       <div><label>Aggregation Type</label><select id="r-agg"></select></div>
       <div id="agg-field-wrap"><label>Aggregation Field</label><select id="r-agg-field"></select></div>
-      <div><label>Threshold Operator</label><select id="r-th-op">
+      <div id="th-op-wrap"><label>Threshold Operator</label><select id="r-th-op">
         <option value="gt">&gt;</option><option value="gte">&ge;</option>
         <option value="lt">&lt;</option><option value="lte">&le;</option>
         <option value="eq">=</option><option value="neq">&ne;</option></select></div>
-      <div><label>Threshold Value</label><input id="r-th-v" type="number" value="10000"></div>
+      <div id="th-v-wrap"><label>Threshold Value</label><input id="r-th-v" type="number" value="10000"></div>
     </div>
     <div id="agg-sub" class="hidden">
       <div class="subsec"><label>Numerator Condition</label><div id="agg-num"></div></div>
@@ -272,11 +272,14 @@ function renderCondition(c,parent,idx,onChange){
 
 function renderAll(){
   renderGroup(condTree,$("cond-root"),renderAll,0);
-  const agg=$("r-agg").value, needsSub=(agg==="percentage"||agg==="ratio");
+  const agg=$("r-agg").value, matchMode=(agg===""), needsSub=(agg==="percentage"||agg==="ratio");
   $("agg-sub").classList.toggle("hidden",!needsSub);
   $("agg-den-wrap").classList.toggle("hidden",agg!=="ratio");
   const needsField=(META.aggregations.find(a=>a.name===agg)||{}).needs_field;
-  $("agg-field-wrap").style.visibility=needsField?"visible":"hidden";
+  $("agg-field-wrap").style.visibility=(needsField&&!matchMode)?"visible":"hidden";
+  // match mode: no threshold needed — one alert per matching record
+  $("th-op-wrap").style.visibility=matchMode?"hidden":"visible";
+  $("th-v-wrap").style.visibility=matchMode?"hidden":"visible";
   if(needsSub){
     if(!numTree)numTree=newGroup("AND");
     renderGroup(numTree,$("agg-num"),renderAll,1);
@@ -290,21 +293,25 @@ function cleanTree(n){if(!n)return null;if(n.logic!==undefined){const kids=n.con
   return n.field?{field:n.field,operator:n.operator,value:n.value}:null}
 
 function buildDefinition(){
-  const agg=$("r-agg").value;
-  const a={type:agg};
-  const needsField=(META.aggregations.find(x=>x.name===agg)||{}).needs_field;
-  if(needsField)a.field=$("r-agg-field").value;
-  if(agg==="percentage"||agg==="ratio"){
-    a.config={};const nt=cleanTree(numTree);if(nt)a.config.numerator_condition=nt;
-    if(agg==="ratio"){const dt=cleanTree(denTree);if(dt)a.config.denominator_condition=dt}
-    const m=$("r-agg-measure").value;if(m)a.field=m;
+  const agg=$("r-agg").value, matchMode=(agg==="");
+  let a=null;
+  if(!matchMode){
+    a={type:agg};
+    const needsField=(META.aggregations.find(x=>x.name===agg)||{}).needs_field;
+    if(needsField)a.field=$("r-agg-field").value;
+    if(agg==="percentage"||agg==="ratio"){
+      a.config={};const nt=cleanTree(numTree);if(nt)a.config.numerator_condition=nt;
+      if(agg==="ratio"){const dt=cleanTree(denTree);if(dt)a.config.denominator_condition=dt}
+      const m=$("r-agg-measure").value;if(m)a.field=m;
+    }
   }
   const d={name:$("r-name").value,description:$("r-desc").value,
-    data_source:$("r-ds").value,target_entity:$("r-entity").value,group_by:$("r-groupby").value,
+    data_source:$("r-ds").value,target_entity:$("r-entity").value,
+    group_by:$("r-groupby").value||null,
     execution_frequency:{value:+$("r-freq-v").value,unit:$("r-freq-u").value},
     time_window:{value:+$("r-tw-v").value,unit:$("r-tw-u").value},
     conditions:cleanTree(condTree),aggregation:a,
-    threshold:{operator:$("r-th-op").value,value:+$("r-th-v").value},
+    threshold:matchMode?null:{operator:$("r-th-op").value,value:+$("r-th-v").value},
     risk_score:+$("r-risk").value,alert_severity:$("r-sev").value,enabled:true};
   if(editingRuleId)d.rule_id=editingRuleId;
   return d;
@@ -342,8 +349,8 @@ async function loadRules(){const rules=await api("/api/rules");
   $("rules-body").innerHTML=rules.map(r=>`<tr>
     <td><b>${r.name}</b><br><span class="pill">${r.rule_id}</span></td><td>v${r.version}</td>
     <td>${r.data_source}</td><td>${r.target_entity}</td>
-    <td>${r.aggregation.type}${r.aggregation.field?" of "+r.aggregation.field:""} by ${r.group_by}</td>
-    <td>${r.threshold.operator} ${r.threshold.value}</td>
+    <td>${r.aggregation&&r.aggregation.type?`${r.aggregation.type}${r.aggregation.field?" of "+r.aggregation.field:""} by ${r.group_by}`:"match"+(r.group_by?" by "+r.group_by:" (per record)")}</td>
+    <td>${r.threshold?`${r.threshold.operator} ${r.threshold.value}`:"—"}</td>
     <td><span class="tag ${r.alert_severity}">${r.alert_severity}</span></td>
     <td>${r.enabled?"✔":"—"}</td>
     <td class="row">
@@ -360,15 +367,17 @@ async function runScheduler(){const r=await api("/api/scheduler/run",{method:"PO
 async function editRule(id){const r=await api("/api/rules/"+id);editingRuleId=id;
   document.querySelector('nav button[data-tab="builder"]').click();
   $("r-name").value=r.name;$("r-desc").value=r.description||"";$("r-ds").value=r.data_source;
-  await loadFields();$("r-entity").value=r.target_entity;$("r-groupby").value=r.group_by;
+  await loadFields();$("r-entity").value=r.target_entity;$("r-groupby").value=r.group_by||"";
   $("r-freq-v").value=r.execution_frequency.value;$("r-freq-u").value=r.execution_frequency.unit;
   $("r-tw-v").value=r.time_window.value;$("r-tw-u").value=r.time_window.unit;
   $("r-risk").value=r.risk_score;$("r-sev").value=r.alert_severity;
-  $("r-agg").value=r.aggregation.type;if(r.aggregation.field){$("r-agg-field").value=r.aggregation.field;$("r-agg-measure").value=r.aggregation.field}
-  $("r-th-op").value=r.threshold.operator;$("r-th-v").value=r.threshold.value;
+  const agg=r.aggregation||{};
+  $("r-agg").value=agg.type||"";
+  if(agg.field){$("r-agg-field").value=agg.field;$("r-agg-measure").value=agg.field}
+  if(r.threshold){$("r-th-op").value=r.threshold.operator;$("r-th-v").value=r.threshold.value}
   condTree=r.conditions||newGroup("AND");
-  numTree=(r.aggregation.config||{}).numerator_condition||null;
-  denTree=(r.aggregation.config||{}).denominator_condition||null;
+  numTree=(agg.config||{}).numerator_condition||null;
+  denTree=(agg.config||{}).denominator_condition||null;
   $("editing-pill").textContent="Editing: "+id+" (v"+r.version+")";$("editing-pill").classList.remove("hidden");
   $("cancel-edit").classList.remove("hidden");renderAll()}
 
@@ -378,7 +387,7 @@ async function loadAlerts(){const alerts=await api("/api/alerts");
   $("alerts-body").innerHTML=alerts.map(a=>`<tr>
     <td>${a.alert_id}</td><td>${a.rule_name} (v${a.rule_version})</td>
     <td>${a.customer??"—"}</td><td>${a.wallet_id??"—"}</td>
-    <td>${a.rule_result.aggregation_value} ${a.rule_result.threshold?`(${a.rule_result.threshold.operator} ${a.rule_result.threshold.value})`:""}</td>
+    <td>${a.rule_result.mode==="match"&&a.rule_result.record?`${a.rule_result.record.amount??""} ${a.rule_result.record.currency??""} (match)`:`${a.rule_result.aggregation_value} ${a.rule_result.threshold?`(${a.rule_result.threshold.operator} ${a.rule_result.threshold.value})`:""}`}</td>
     <td>${a.risk_score}</td><td><span class="tag ${a.alert_severity}">${a.alert_severity}</span></td>
     <td>${(a.detection_time||"").replace("T"," ").slice(0,19)}</td>
     <td><select onchange='setStatus("${a.alert_id}",this.value)'>${STATUSES.map(s=>`<option ${s===a.investigation_status?"selected":""}>${s}</option>`).join("")}</select></td></tr>`).join("")||"<tr><td colspan=9>No alerts</td></tr>"}
@@ -429,6 +438,8 @@ async function loadFields(){
   catch(e){msg("builder-msg","Cannot load fields from Elasticsearch: "+e.message+"\nGo to the Data tab to create the indices first.",false);FIELDS=[];renderAll();return}
   FIELDS=r.fields;
   fill("r-groupby",FIELDS,"name",f=>`${f.name} (${f.type})`);
+  const gb=$("r-groupby"),none=document.createElement("option");
+  none.value="";none.textContent="— per record (no grouping) —";gb.insertBefore(none,gb.firstChild);
   fill("r-agg-field",FIELDS.filter(f=>["double","long"].includes(f.type)),"name",f=>`${f.name} (${f.type})`);
   const m=$("r-agg-measure");m.innerHTML='<option value="">— count —</option>';
   FIELDS.filter(f=>["double","long"].includes(f.type)).forEach(f=>{const o=document.createElement("option");o.value=f.name;o.textContent=f.name;m.appendChild(o)});
@@ -439,6 +450,9 @@ async function loadFields(){
   fill("r-ds",META.datasources);fill("r-entity",META.target_entities);fill("r-sev",META.severities);
   fill("r-freq-u",META.time_units);fill("r-tw-u",META.time_units);
   fill("r-agg",META.aggregations,"name",a=>a.name+(a.experimental?" (experimental)":""));
+  const ag=$("r-agg"),noAgg=document.createElement("option");
+  noAgg.value="";noAgg.textContent="— none (alert on every matching record) —";
+  ag.insertBefore(noAgg,ag.firstChild);ag.value="count";
   $("r-tw-u").value="hours";$("r-freq-u").value="hours";$("r-sev").value="High";
   $("r-ds").onchange=loadFields;$("r-agg").onchange=renderAll;
   await loadFields();
